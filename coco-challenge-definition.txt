@@ -1,0 +1,310 @@
+The MS COCO classification challenge
+
+This notebook defines the multi-label classification challenge on the MS COCO dataset. It defines the problem, sets the rules of organization and presents tools you are provided with to accomplish the challenge.
+
+1. Problem statement
+Each image has several categories of objects to predict, hence the difference compared to the classification problem we have seen on the CIFAR10 dataset where each image belonged to a single category, therefore the network loss function and prediction mechanism (only highest output probability) were defined taking this constraint into account.
+
+We adapted the MS COCO dataset for the requirements of this challenge by, among other things, reducing the number of images and their dimensions to facilitate processing.
+
+In the companion ms-coco.zip compressed directory you will find two sub-directories:
+
+images: which contains the images in train (65k) and test (~5k) subsets,
+labels: which lists labels for each of the images in the train subset only.
+Each label file gives a list of class IDs that correspond to the class index in the following tuple:
+
+classes = ("person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", 
+           "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+           "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",       
+           "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+           "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+           "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", 
+           "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", 
+           "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", 
+           "hair drier", "toothbrush")
+Your goal is to follow a transfer learning strategy in training and validating a network on your own distribution of training data into training and a validation subsets, then to test it on the test subset by producing a JSON file with content of the following format:
+
+{
+    "000000000139": [
+        56,
+        60,
+        62
+    ],
+    "000000000285": [
+        21,
+    ],
+    "000000000632": [
+        57,
+        59,
+    73
+    ],
+    # other test images
+}
+In this file, the name (without extension) of each test image is associated with a list of class indices predicted by your network. Make sure that the JSON file you produce follows this format strictly.
+
+You will submit your JSON prediction file to the following online evaluation server and leaderboard, which will evaluate your predictions on test set labels, unavailable to you.
+
+WARNING: Use this server with the greatest care. A new submission with identical Participant or group name will overwrite the identically named submission, if one already exists, therefore check the leaderboard first. Do not make duplicate leaderboard entries for your group, keep track of your test scores privately. Also pay attention to upload only JSON files of the required format.
+The evaluation server calculates and returns mean performances over all classes, and optionally per class performances. Entries in the leaderboard are sorted by the F1 metric.
+
+You can request an evaluation as many times as you want. It is up to you to specify the final evaluation by updating the leaderboard entry corresponding to your Participant or group name. This entry will be taken into account for grading your work.
+
+It goes without saying that it is prohibited to use another distribution of the MS COCO database for training, e.g. the Torchvision dataset.
+
+2. Organization
+Given the scope of the project, you will work in groups of 2.
+Work on the challenge begins on the MLCV lab 3 session, that is on the 11th of February.
+Results are due on the 2nd of March, 18:00. They comrpise:
+a submission to the leaderboard,
+a commented Python script (with any necessary modules) or Jupyter Notebook, uploaded on Moodle in the challenge repository by one of the members of the group.
+3. Tools and evaluation
+In addition to the MS COCO annotated data and the evaluation server, we provide you with most code building blocks. Your task is to understand them and use them to create the glue logic, that is the main program, putting all these blocks together and completing them as necessary to implement a complete machine learning workflow to train and validate possibly several models, and produce the test JSON file to be submitted to the leaderboard. Comparative study of networks and analysis of results is of particular importance for grading. Please refer to course organization slides for the details of grading.
+
+3.1 Custom Datasets
+We provide you with two custom torch.utils.data.Dataset sub-classes to use in training and testing.
+
+import os
+from glob import glob
+from pathlib import Path
+
+from PIL import Image
+import torch
+
+
+class COCOTrainImageDataset(torch.utils.data.Dataset):
+    def __init__(self, img_dir, annotations_dir, max_images=None, transform=None):
+        self.img_labels = sorted(glob("*.cls", root_dir=annotations_dir))
+        if max_images:
+            self.img_labels = self.img_labels[:max_images]
+        self.img_dir = img_dir
+        self.annotations_dir = annotations_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.img_labels)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.img_dir, Path(self.img_labels[idx]).stem + ".jpg")
+        labels_path = os.path.join(self.annotations_dir, self.img_labels[idx])
+        image = Image.open(img_path).convert("RGB")
+        with open(labels_path) as f: 
+            labels = [int(label) for label in f.readlines()]
+        if self.transform:
+            image = self.transform(image)
+        labels = torch.zeros(80).scatter_(0, torch.tensor(labels), value=1)
+        return image, labels
+
+
+class COCOTestImageDataset(torch.utils.data.Dataset):
+    def __init__(self, img_dir, transform=None):
+        self.img_list = sorted(glob("*.jpg", root_dir=img_dir))    
+        self.img_dir = img_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.img_list)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.img_dir, self.img_list[idx])
+        image = Image.open(img_path).convert("RGB")        
+        if self.transform:
+            image = self.transform(image)
+        return image, Path(img_path).stem # filename w/o extension
+
+3.2 Training and validation loops
+The following are two general-purpose classification train and validation loop functions to be called inside the epochs for-loop with appropriate argument settings.
+
+Pay particular attention to the validation_loop() function's arguments multi_label, th_multi_label and one_hot. This function can be called on data loaders of both train and validation sets.
+
+import torch
+
+
+def train_loop(train_loader, net, criterion, optimizer, device,
+               mbatch_loss_group=-1):
+    net.train()
+    running_loss = 0.0
+    mbatch_losses = []
+    for i, data in enumerate(train_loader):
+        inputs, labels = data[0].to(device), data[1].to(device)
+        optimizer.zero_grad()
+        outputs = net(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+        # following condition False by default, unless mbatch_loss_group > 0
+        if i % mbatch_loss_group == mbatch_loss_group - 1:
+            mbatch_losses.append(running_loss / mbatch_loss_group)
+            running_loss = 0.0
+    if mbatch_loss_group > 0:
+        return mbatch_losses
+
+
+def validation_loop(val_loader, net, criterion, num_classes, device,
+                    multi_label=False, th_multi_label=0.5, one_hot=False, class_metrics=False):
+    net.eval()
+    loss = 0
+    correct = 0
+    size = len(val_loader.dataset)
+    class_total = {label:0 for label in range(num_classes)}
+    class_tp = {label:0 for label in range(num_classes)}
+    class_fp = {label:0 for label in range(num_classes)}
+    with torch.no_grad():
+        for data in val_loader:
+            images, labels = data[0].to(device), data[1].to(device)
+            outputs = net(images)
+            loss += criterion(outputs, labels).item() * images.size(0)
+            if not multi_label:    
+                predictions = torch.zeros_like(outputs)
+                predictions[torch.arange(outputs.shape[0]), torch.argmax(outputs, dim=1)] = 1.0
+            else:
+                predictions = torch.where(outputs > th_multi_label, 1.0, 0.0)
+            if not one_hot:
+                labels_mat = torch.zeros_like(outputs)
+                labels_mat[torch.arange(outputs.shape[0]), labels] = 1.0
+                labels = labels_mat
+                
+            tps = predictions * labels
+            fps = predictions - tps
+            
+            tps = tps.sum(dim=0)
+            fps = fps.sum(dim=0)
+            lbls = labels.sum(dim=0)  
+                
+            for c in range(num_classes):
+                class_tp[c] += tps[c]
+                class_fp[c] += fps[c]
+                class_total[c] += lbls[c]
+                    
+            correct += tps.sum()
+
+    class_prec = []
+    class_recall = []
+    freqs = []
+    for c in range(num_classes):
+        class_prec.append(0 if class_tp[c] == 0 else
+                          class_tp[c] / (class_tp[c] + class_fp[c]))
+        class_recall.append(0 if class_tp[c] == 0 else
+                            class_tp[c] / class_total[c])
+        freqs.append(class_total[c])
+
+    freqs = torch.tensor(freqs)
+    class_weights = 1. / freqs
+    class_weights /= class_weights.sum()
+    class_prec = torch.tensor(class_prec)
+    class_recall = torch.tensor(class_recall)
+    prec = (class_prec * class_weights).sum()
+    recall = (class_recall * class_weights).sum()
+    f1 = 2. / (1/prec + 1/recall)
+    val_loss = loss / size
+    accuracy = correct / freqs.sum()
+    results = {"loss": val_loss, "accuracy": accuracy, "f1": f1,\
+               "precision": prec, "recall": recall}
+
+    if class_metrics:
+        class_results = []
+        for p, r in zip(class_prec, class_recall):
+            f1 = (0 if p == r == 0 else 2. / (1/p + 1/r))
+            class_results.append({"f1": f1, "precision": p, "recall": r})
+        results = results, class_results
+
+    return results
+
+3.3 Tensorboard logging (optional)
+Evaluation metrics and losses produced by the validation_loop() function on train and validation data can be logged to a Tensorboard SummaryWriter which allows you to observe training graphically via the following function:
+
+def update_graphs(summary_writer, epoch, train_results, test_results,
+                  train_class_results=None, test_class_results=None, 
+                  class_names = None, mbatch_group=-1, mbatch_count=0, mbatch_losses=None):
+    if mbatch_group > 0:
+        for i in range(len(mbatch_losses)):
+            summary_writer.add_scalar("Losses/Train mini-batches",
+                                  mbatch_losses[i],
+                                  epoch * mbatch_count + (i+1)*mbatch_group)
+
+    summary_writer.add_scalars("Losses/Train Loss vs Test Loss",
+                               {"Train Loss" : train_results["loss"],
+                                "Test Loss" : test_results["loss"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
+
+    summary_writer.add_scalars("Metrics/Train Accuracy vs Test Accuracy",
+                               {"Train Accuracy" : train_results["accuracy"],
+                                "Test Accuracy" : test_results["accuracy"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
+
+    summary_writer.add_scalars("Metrics/Train F1 vs Test F1",
+                               {"Train F1" : train_results["f1"],
+                                "Test F1" : test_results["f1"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
+
+    summary_writer.add_scalars("Metrics/Train Precision vs Test Precision",
+                               {"Train Precision" : train_results["precision"],
+                                "Test Precision" : test_results["precision"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
+
+    summary_writer.add_scalars("Metrics/Train Recall vs Test Recall",
+                               {"Train Recall" : train_results["recall"],
+                                "Test Recall" : test_results["recall"]},
+                               (epoch + 1) if not mbatch_group > 0
+                                     else (epoch + 1) * mbatch_count)
+
+    if train_class_results and test_class_results:
+        for i in range(len(train_class_results)):
+            summary_writer.add_scalars(f"Class Metrics/{class_names[i]}/Train F1 vs Test F1",
+                                       {"Train F1" : train_class_results[i]["f1"],
+                                        "Test F1" : test_class_results[i]["f1"]},
+                                       (epoch + 1) if not mbatch_group > 0
+                                             else (epoch + 1) * mbatch_count)
+
+            summary_writer.add_scalars(f"Class Metrics/{class_names[i]}/Train Precision vs Test Precision",
+                                       {"Train Precision" : train_class_results[i]["precision"],
+                                        "Test Precision" : test_class_results[i]["precision"]},
+                                       (epoch + 1) if not mbatch_group > 0
+                                             else (epoch + 1) * mbatch_count)
+
+            summary_writer.add_scalars(f"Class Metrics/{class_names[i]}/Train Recall vs Test Recall",
+                                       {"Train Recall" : train_class_results[i]["recall"],
+                                        "Test Recall" : test_class_results[i]["recall"]},
+                                       (epoch + 1) if not mbatch_group > 0
+                                             else (epoch + 1) * mbatch_count)
+    summary_writer.flush()
+
+4. The skeleton of the model training and validation program
+Your main program should have more or less the following sections and control flow:
+
+# import statements for python, torch and companion libraries and your own modules
+
+# global variables defining training hyper-parameters among other things 
+
+# device initialization
+
+# data directories initialization
+
+# instantiation of transforms, datasets and data loaders
+# TIP : use torch.utils.data.random_split to split the training set into train and validation subsets
+
+# class definitions
+
+# instantiation and preparation of network model
+
+# instantiation of loss criterion
+# instantiation of optimizer, registration of network parameters
+
+# definition of current best model path
+# initialization of model selection metric
+
+# creation of tensorboard SummaryWriter (optional)
+
+# epochs loop:
+#   train
+#   validate on train set
+#   validate on validation set
+#   update graphs (optional)
+#   is new model better than current model ?
+#       save it, update current best metric
+
+# close tensorboard SummaryWriter if created (optional)
