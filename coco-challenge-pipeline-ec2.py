@@ -478,7 +478,6 @@ scaler = GradScaler()  # Automatic Mixed Precision
 training_log = []      # Track per-epoch metrics
 best_val_loss = float("inf")  # Track best validation loss
 
-
 # ==========================================================
 # STEP 8/14: TRAINING + VALIDATION (BEST MODEL SAVING)
 # ==========================================================
@@ -489,7 +488,9 @@ print("WHY:\n  Preserve the model with the lowest validation loss, avoiding unne
 print("HOW:\n  Forward → compute loss → backward → optimizer → AMP → validate → update scheduler → save best model.\n")
 
 for epoch in range(1, EPOCHS + 1):
+    epoch_start_time = datetime.now()
     print(f"\n================ Epoch {epoch}/{EPOCHS} ================")
+    print(f"⏱ Epoch start time: {epoch_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # ---------------- Training Phase ----------------
     print("Step 8/14: Training")
@@ -561,15 +562,23 @@ for epoch in range(1, EPOCHS + 1):
         torch.save(model.state_dict(), "best_model.pth")
         print("✔ New best model saved!\n")
 
-    # Track metrics
+    epoch_end_time = datetime.now()
+    print(f"⏱ Epoch end time  : {epoch_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"⏱ Epoch duration  : {(epoch_end_time - epoch_start_time)}\n")
+
+    # Track metrics including timestamps
     training_log.append({
         "epoch": epoch,
         "train_loss": avg_train_loss,
         "val_loss": avg_val_loss,
-        "val_accuracy": accuracy
+        "val_accuracy": accuracy,
+        "epoch_start_time": epoch_start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "epoch_end_time": epoch_end_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "epoch_duration": str(epoch_end_time - epoch_start_time)
     })
 
 print("✔ Training completed. Best model stored as 'best_model.pth'.")
+
 
 # ==========================================================
 # STEP 9/14: FINAL VALIDATION METRICS
