@@ -80,15 +80,15 @@ print("✔ Transforms defined for train and validation/test.\n")
 
 # ==========================================================
 # STEP 4/14: Dataset Preparation & DataLoaders
-# (EC2 + Google Drive + Deterministic Consolidation)
+# (EC2 + Google Drive + Deterministic Consolidation + Augmentation)
 # ==========================================================
 
 print("\nStep 4/14: Dataset & DataLoaders Setup (Production EC2 Version)")
 print("-----------------------------------------------------------------")
-print("WHAT:\n  Automatically mount Google Drive, copy MS COCO zip files locally,"
+print("WHAT:\n  Mount Google Drive, copy MS COCO zip files locally,"
       "\n  safely unzip with deterministic subdirectory handling,"
       "\n  split into train/validation subsets without leakage,"
-      "\n  and prepare GPU-optimized DataLoaders.\n")
+      "\n  apply train/val augmentations, and prepare GPU-optimized DataLoaders.\n")
 
 print("WHY:\n  1. Training directly from Google Drive is network-bound and slow.\n"
       "  2. Copying to local EC2 NVMe/EBS maximizes GPU utilization.\n"
@@ -101,15 +101,19 @@ print("HOW:\n  1. Install & verify rclone.\n"
       "  2. Mount Google Drive automatically.\n"
       "  3. Copy zip files Drive → Local EC2 disk.\n"
       "  4. Recursively extract and consolidate files by extension.\n"
-      "  5. Create independent dataset objects for train/val.\n"
+      "  5. Create independent dataset objects for train/val with transforms.\n"
       "  6. Build GPU-optimized DataLoaders.\n")
 
 # ==========================================================
-# 1️⃣ GOOGLE DRIVE AUTO-MOUNT
+# 1️⃣ GOOGLE DRIVE AUTO-MOUNT (EC2)
 # ==========================================================
 import os, shutil, subprocess, zipfile
 from glob import glob
 from pathlib import Path
+from torch.utils.data import Dataset, DataLoader, Subset
+from PIL import Image
+import torch
+import pandas as pd
 
 def command_exists(cmd):
     return shutil.which(cmd) is not None
@@ -127,13 +131,10 @@ else:
 
 RCLONE_REMOTE = "gdrive"
 GDRIVE_MOUNT = "/mnt/gdrive"
-
 os.makedirs(GDRIVE_MOUNT, exist_ok=True)
 
 print("Attempting Google Drive mount...")
-
 mount_cmd = f"rclone mount {RCLONE_REMOTE}: {GDRIVE_MOUNT} --daemon --vfs-cache-mode writes"
-
 if run_command(mount_cmd):
     print("✔ Google Drive mounted successfully.")
 else:
@@ -147,8 +148,8 @@ DRIVE_DATA_DIR = os.path.join(GDRIVE_MOUNT, "ms-coco")
 
 os.makedirs(ROOT_DIR, exist_ok=True)
 
-TRAIN_IMG_ZIP = os.path.join(ROOT_DIR, "train-resized.zip")
-TEST_IMG_ZIP  = os.path.join(ROOT_DIR, "test-resized.zip")
+TRAIN_IMG_ZIP   = os.path.join(ROOT_DIR, "train-resized.zip")
+TEST_IMG_ZIP    = os.path.join(ROOT_DIR, "test-resized.zip")
 TRAIN_LABEL_ZIP = os.path.join(ROOT_DIR, "train.zip")
 
 TRAIN_IMG_DIR   = os.path.join(ROOT_DIR, "images/train")
@@ -194,22 +195,17 @@ def unzip_and_consolidate(zip_path, target_dir, extension):
         zip_ref.extractall(temp_dir)
 
     print("⚡ Recursively consolidating nested directories...")
-
     ensure_dir(target_dir)
     moved = 0
-
     for root, _, files in os.walk(temp_dir):
         for file in files:
             if file.lower().endswith(extension):
                 src = os.path.join(root, file)
                 dst = os.path.join(target_dir, file)
-
                 if not os.path.exists(dst):
                     shutil.move(src, dst)
                     moved += 1
-
     shutil.rmtree(temp_dir)
-
     print(f"✔ Consolidated {moved} {extension} files into {target_dir}\n")
 
 # Execute deterministic extraction
@@ -220,7 +216,7 @@ unzip_and_consolidate(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, ".cls")
 # ==========================================================
 # 5️⃣ DATASET CLASSES
 # ==========================================================
-class COCOTrainImageDataset(torch.utils.data.Dataset):
+class COCOTrainImageDataset(Dataset):
     """MS COCO Training Dataset for multi-label classification"""
     def __init__(self, img_dir, annotations_dir, transform=None):
         self.img_labels = sorted(glob(os.path.join(annotations_dir, "*.cls")))
@@ -248,8 +244,7 @@ class COCOTrainImageDataset(torch.utils.data.Dataset):
 
         return image, label_tensor
 
-
-class COCOTestImageDataset(torch.utils.data.Dataset):
+class COCOTestImageDataset(Dataset):
     """MS COCO Test Dataset (no labels)"""
     def __init__(self, img_dir, transform=None):
         self.img_list = sorted(glob(os.path.join(img_dir, "*.jpg")))
@@ -261,23 +256,15 @@ class COCOTestImageDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = self.img_list[idx]
         image = Image.open(img_path).convert("RGB")
-
         if self.transform:
             image = self.transform(image)
-
         return image, Path(img_path).stem
 
 # ==========================================================
-# 6️⃣ SAFE TRAIN / VALIDATION SPLIT (NO TRANSFORM LEAKAGE)
+# 6️⃣ SAFE TRAIN / VALIDATION SPLIT + AUGMENTATIONS
 # ==========================================================
-print("Applying safe train/validation split...")
-print("WHAT:\n  Create independent dataset objects with separate transforms.")
-print("WHY:\n  random_split shares underlying dataset → causes transform overwrite.\n"
-      "  Independent instances eliminate leakage.")
-print("HOW:\n  Shuffle indices → assign to separate train/val subsets.\n")
-
+print("Applying safe train/validation split with independent transforms...")
 base_dataset = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, transform=None)
-
 total_size = len(base_dataset)
 train_size = int(0.8 * total_size)
 val_size = total_size - train_size
@@ -286,7 +273,7 @@ generator = torch.Generator().manual_seed(SEED)
 indices = torch.randperm(total_size, generator=generator)
 
 train_indices = indices[:train_size]
-val_indices = indices[train_size:]
+val_indices   = indices[train_size:]
 
 train_dataset_full = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, transform=train_transform)
 val_dataset_full   = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, transform=val_transform)
@@ -321,7 +308,7 @@ test_loader = DataLoader(
 )
 
 # ==========================================================
-# 8️⃣ DATASET SUMMARY
+# 8️⃣ DATASET SUMMARY + AUGMENTATION DOCUMENTATION
 # ==========================================================
 dataset_summary = pd.DataFrame({
     "Component": [
