@@ -8,20 +8,49 @@ print("WHAT:\n  Import required Python packages and configure device.")
 print("WHY:\n  Ensure reproducibility and GPU usage for training.")
 print("HOW:\n  Use torch, torchvision, PIL, pandas, sklearn, and set torch device.\n")
 
-import os
 import random
 import numpy as np
 import pandas as pd
 from glob import glob
 from pathlib import Path
 from PIL import Image
-import zipfile
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms, models
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.metrics import f1_score, average_precision_score
+import os, shutil, zipfile
+import json                       
+from datetime import datetime     
+from sklearn.metrics import average_precision_score, f1_score, accuracy_score
+
+# ----------------------------------------------------------
+# Device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"✔ Using device: {device}")
+
+# ----------------------------------------------------------
+# Example placeholders (replace with actual variables from your pipeline)
+NUM_CLASSES = 80
+THRESHOLD = 0.5
+SEED = 42
+
+# Step 4/14 & 6/14: placeholder transforms
+from torchvision import transforms
+IMG_SIZE = 224
+train_transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.RandomHorizontalFlip(),
+    transforms.ColorJitter(),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
+])
+val_transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
+])
 
 # Reproducibility
 SEED = 42
@@ -79,8 +108,7 @@ val_transform = transforms.Compose([
 print("✔ Transforms defined for train and validation/test.\n")
 
 # ==========================================================
-# STEP 4/14: Dataset Preparation & DataLoaders
-# (Colab Version → EC2 Logic Adapted)
+# STEP 4/14: Dataset Preparation & DataLoaders (Colab)
 # ==========================================================
 print("\nStep 4/14: Dataset & DataLoaders Setup (Colab Version)")
 print("-------------------------------------------------------")
@@ -96,32 +124,38 @@ print("WHY:\n  1. Training directly from Google Drive is network-bound and slow.
       "  5. Train and validation must use independent dataset instances.\n"
       "  6. Preserve full compatibility with Steps 5–14 pipeline.\n")
 
-print("HOW:\n  1. Mount Google Drive.\n"
+print("HOW:\n  1. Mount Google Drive with force_remount to ensure credentials.\n"
       "  2. Copy/unzip zip files → flatten nested directories.\n"
       "  3. Create independent dataset objects for train/val with transforms.\n"
       "  4. Build GPU-optimized DataLoaders.\n")
 
 # ==========================================================
-# 1️⃣ GOOGLE DRIVE MOUNT
+# 1️⃣ GOOGLE DRIVE MOUNT (COLAB)
 # ==========================================================
-from google.colab import drive
-drive.mount('/content/drive')
+try:
+    from google.colab import drive
+    drive.mount('/content/drive', force_remount=True)
+    print("✔ Google Drive mounted successfully at /content/drive")
+except Exception as e:
+    print(f"⚠ Google Drive mount failed: {e}")
+    print("Make sure you run this cell in a Colab environment and follow the auth prompt.")
 
 # ==========================================================
-# 2️⃣ DATASET PATHS (Colab)
+# 2️⃣ DATASET PATHS
 # ==========================================================
 import os, shutil, zipfile
 from glob import glob
 from pathlib import Path
-from torch.utils.data import Dataset, DataLoader, Subset
 from PIL import Image
 import torch
+from torch.utils.data import Dataset, DataLoader, Subset
 import pandas as pd
 
 ROOT_DIR = "/content/data"
-DRIVE_DATA_DIR = "/content/drive/MyDrive/ms-coco"
-
 os.makedirs(ROOT_DIR, exist_ok=True)
+
+# Paths to zip files (assuming you placed them in Drive)
+DRIVE_DATA_DIR = "/content/drive/MyDrive"  # update as per your Drive path
 
 TRAIN_IMG_ZIP   = os.path.join(ROOT_DIR, "train-resized.zip")
 TEST_IMG_ZIP    = os.path.join(ROOT_DIR, "test-resized.zip")
@@ -132,7 +166,7 @@ TRAIN_LABEL_DIR = os.path.join(ROOT_DIR, "labels/train")
 TEST_IMG_DIR    = os.path.join(ROOT_DIR, "images/test")
 
 # ==========================================================
-# 3️⃣ COPY ZIP FILES (if needed)
+# 3️⃣ COPY ZIP FILES FROM DRIVE → LOCAL
 # ==========================================================
 def copy_if_needed(src, dst):
     if os.path.exists(dst):
@@ -148,7 +182,7 @@ copy_if_needed(os.path.join(DRIVE_DATA_DIR, "test-resized.zip"), TEST_IMG_ZIP)
 copy_if_needed(os.path.join(DRIVE_DATA_DIR, "train.zip"), TRAIN_LABEL_ZIP)
 
 # ==========================================================
-# 4️⃣ DETERMINISTIC UNZIP + RECURSIVE CONSOLIDATION
+# 4️⃣ DETERMINISTIC UNZIP + CONSOLIDATION
 # ==========================================================
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
@@ -182,7 +216,6 @@ def unzip_and_consolidate(zip_path, target_dir, extension):
     shutil.rmtree(temp_dir)
     print(f"✔ Consolidated {moved} {extension} files into {target_dir}\n")
 
-# Extract datasets
 unzip_and_consolidate(TRAIN_IMG_ZIP, TRAIN_IMG_DIR, ".jpg")
 unzip_and_consolidate(TEST_IMG_ZIP, TEST_IMG_DIR, ".jpg")
 unzip_and_consolidate(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, ".cls")
@@ -244,7 +277,6 @@ val_size = total_size - train_size
 
 generator = torch.Generator().manual_seed(SEED)
 indices = torch.randperm(total_size, generator=generator)
-
 train_indices = indices[:train_size]
 val_indices   = indices[train_size:]
 
@@ -281,7 +313,7 @@ test_loader = DataLoader(
 )
 
 # ==========================================================
-# 8️⃣ DATASET SUMMARY + AUGMENTATION DOCUMENTATION
+# 8️⃣ DATASET SUMMARY
 # ==========================================================
 dataset_summary = pd.DataFrame({
     "Component": [
@@ -304,18 +336,16 @@ dataset_summary = pd.DataFrame({
         f"{IMG_SIZE}x{IMG_SIZE}",
         "Flip + Rotation + ColorJitter",
         "Resize + Normalize Only",
-        "Google Drive → Colab /content/data (Deterministic Consolidation)"
+        "Google Drive → Local Colab Disk (Deterministic Consolidation)"
     ]
 })
 
 print("\nDataset Summary:")
 print(dataset_summary)
-
 print(f"\n✔ DataLoaders created successfully.")
 print(f"✔ Train batches: {len(train_loader)}")
 print(f"✔ Validation batches: {len(val_loader)}")
 print(f"✔ Test batches: {len(test_loader)}\n")
-
 
 # ==========================================================
 # STEP 5/14: MODEL SETUP
@@ -380,6 +410,9 @@ print("WHY:\n  1) Each class is treated as an independent binary problem.\n"
 print("HOW:\n  1) Compute per-class positive frequencies from training set.\n"
       "  2) Derive pos_weight = num_negatives / (num_positives + epsilon) → optionally apply smoothing.\n"
       "  3) Apply nn.BCEWithLogitsLoss with pos_weight on GPU.\n")
+
+# Placeholder criterion
+criterion = nn.BCEWithLogitsLoss()
 
 # -----------------------------
 # Compute Class Frequencies
@@ -460,6 +493,10 @@ print("------------------------------------------------------")
 print("WHAT:\n  Train and validate the model while saving only the best model.")
 print("WHY:\n  Preserve the model with the lowest validation loss, avoiding unnecessary checkpoints.")
 print("HOW:\n  Forward → compute loss → backward → optimizer → AMP → validate → update scheduler → save best model.\n")
+
+
+# placeholder best model path
+best_model_path = "best_model.pth"
 
 for epoch in range(1, EPOCHS + 1):
     epoch_start_time = datetime.now()
@@ -568,6 +605,22 @@ print("HOW:\n  1) Load best model checkpoint.\n"
       "  3) Collect all labels and probabilities to compute mAP.\n"
       "  4) Compute micro-F1 (global) and macro-F1 (class-wise average).\n"
       "  5) Print overall and per-class metrics.\n")
+
+# placeholder for validation loop function
+def validation_loop(loader, model, criterion, num_classes, device, multi_label=True, th_multi_label=0.5, class_metrics=False):
+    """
+    Dummy placeholder: Replace with your actual validation loop.
+    Should return (val_results, val_class_results)
+    val_results = dict(loss=..., f1=..., accuracy=...)
+    val_class_results = list of dicts per class: [{'f1':..., 'precision':..., 'recall':...}, ...]
+    """
+    val_results = {"loss": 0.0, "f1": 0.0, "accuracy": 0.0}
+    val_class_results = [{"f1":0.0, "precision":0.0, "recall":0.0} for _ in range(num_classes)]
+    return val_results, val_class_results
+
+
+# placeholder for class names
+classes = [f"class_{i}" for i in range(NUM_CLASSES)]
 
 # Load best model checkpoint
 model.load_state_dict(torch.load(best_model_path, map_location=device))
