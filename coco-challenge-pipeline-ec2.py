@@ -395,33 +395,37 @@ print(f"  Trainable Parameters: {trainable_params:,}")
 print("✔ Model initialized successfully.\n")
 
 # ==========================================================
-# STEP 6/14: LOSS FUNCTION
+# STEP 6/14: LOSS FUNCTION (CLASS IMBALANCE HANDLING)
 # ==========================================================
 print("Step 6/14: Loss Function Definition")
 print("------------------------------------")
-print("WHAT:\n  Define objective function for multi-label classification.\n")
-print("WHY:\n  Each class is treated as an independent binary problem.\n"
-      "  Class imbalance is addressed using per-class positive weights.\n")
-print("HOW:\n  Compute per-class positive frequencies → derive pos_weight →"
-      " apply BCEWithLogitsLoss.\n")
+print("WHAT:\n  Define objective function for multi-label classification with class imbalance handling.\n")
+print("WHY:\n  1) Each class is treated as an independent binary problem.\n"
+      "  2) MS COCO exhibits significant label imbalance.\n"
+      "  3) Per-class positive weighting stabilizes training and improves rare-class learning.\n")
+print("HOW:\n  1) Compute per-class positive frequencies from training set.\n"
+      "  2) Derive pos_weight = num_negatives / (num_positives + epsilon) → optionally apply smoothing.\n"
+      "  3) Apply nn.BCEWithLogitsLoss with pos_weight on GPU.\n")
 
 # -----------------------------
 # Compute Class Frequencies
 # -----------------------------
 print("Computing class frequency statistics...")
 
-num_positives = torch.zeros(NUM_CLASSES)
+num_positives = torch.zeros(NUM_CLASSES, device=device)
 num_samples = 0
 
 for _, labels in train_loader:
+    labels = labels.to(device)
     num_positives += labels.sum(dim=0)
     num_samples += labels.size(0)
 
 num_negatives = num_samples - num_positives
 
-# Prevent division by zero
+# Optional smoothing to avoid extreme weights for very rare/very common classes
 epsilon = 1e-6
-pos_weight = num_negatives / (num_positives + epsilon)
+smooth_factor = 0.05  # rec #3: small additive smoothing
+pos_weight = (num_negatives + smooth_factor) / (num_positives + smooth_factor + epsilon)
 pos_weight = pos_weight.to(device)
 
 # -----------------------------
@@ -430,12 +434,11 @@ pos_weight = pos_weight.to(device)
 criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
 print("Loss Configuration Summary:")
-print("  Loss Function : BCEWithLogitsLoss")
-print("  Multi-label   : Yes")
-print("  Class Weight  : Inverse frequency weighting")
+print(f"  Loss Function : BCEWithLogitsLoss")
+print(f"  Multi-label   : Yes")
+print(f"  Class Weight  : Inverse frequency weighting with smoothing ({smooth_factor})")
 print(f"  Threshold     : {THRESHOLD}")
 print("✔ Loss function initialized successfully.\n")
-
 
 # ==========================================================
 # STEP 7/14: OPTIMIZER & LR STRATEGY
