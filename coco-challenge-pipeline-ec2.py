@@ -697,11 +697,11 @@ print("\nStep 13/14: Pipeline Completed")
 print("✔ Model trained, validated, test JSON ready, inference ready.")
 
 # ==========================================================
-# STEP 14/14: JSON EXPERIMENT REPORT
+# STEP 14/14: JSON EXPERIMENT REPORT (WITH AUGMENTATION + POS_WEIGHT)
 # ==========================================================
 print("\nStep 14/14: JSON Experiment Report Generation")
 print("------------------------------------------------")
-print("WHAT:\n  Generate a structured report summarizing hyperparameters, model, training log, metrics, dataset info, and submission path.")
+print("WHAT:\n  Generate a structured report summarizing hyperparameters, model, training log, metrics, dataset info, augmentation strategies, class imbalance handling, and submission path.")
 print("WHY:\n  1) Reproducibility and traceability.\n"
       "  2) Keeps all experiment information consolidated.\n"
       "  3) Ready for sharing or automated logging.")
@@ -709,11 +709,16 @@ print("HOW:\n  1) Collect hyperparameters and model details.\n"
       "  2) Include training log.\n"
       "  3) Add validation metrics (overall + class-wise + mAP).\n"
       "  4) Include best model path and submission JSON path.\n"
-      "  5) Include dataset info and save JSON.\n")
+      "  5) Include dataset info and augmentation details.\n"
+      "  6) Include per-class positive weights used in BCEWithLogitsLoss.\n"
+      "  7) Save JSON.\n")
+
+# Convert pos_weight tensor to list for JSON
+pos_weight_list = pos_weight.cpu().tolist() if 'pos_weight' in globals() else None
 
 experiment_report = {
     "experiment_name": "EfficientNet-B3 COCO Multi-label Classification",
-    "experiment_start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # capture start ideally
+    "experiment_start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Ideally captured at pipeline start
     "experiment_end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "hyperparameters": {
         "batch_size": BATCH_SIZE,
@@ -737,14 +742,20 @@ experiment_report = {
         "mAP_val": mAP_val,
         "classwise_val": val_class_results
     },
-    "best_model_path": best_model_path,
-    "submission_json_path": submission_path,
     "training_log": training_log,
     "dataset_info": {
         "train_images": len(train_loader.dataset),
         "val_images": len(val_loader.dataset),
-        "test_images": len(test_loader.dataset)
-    }
+        "test_images": len(test_loader.dataset),
+        "train_augmentation": "Flip + Rotation + ColorJitter",
+        "validation_augmentation": "Resize + Normalize Only"
+    },
+    "class_imbalance": {
+        "pos_weight": pos_weight_list,
+        "description": "Inverse frequency weighting used in BCEWithLogitsLoss per class."
+    },
+    "best_model_path": best_model_path,
+    "submission_json_path": submission_path
 }
 
 # Save JSON report
@@ -753,5 +764,4 @@ with open(json_output_path, 'w') as json_file:
     json.dump(experiment_report, json_file, indent=4)
 
 print(f"✔ JSON experiment report successfully saved to {json_output_path}")
-print("✔ Report includes hyperparameters, model info, validation metrics (overall + class-wise + mAP), training log, dataset info, and test submission path.\n")
-
+print("✔ Report now includes hyperparameters, model info, training log, validation metrics (overall + class-wise + mAP), dataset info, augmentation strategies, class imbalance weights, and test submission path.\n")
