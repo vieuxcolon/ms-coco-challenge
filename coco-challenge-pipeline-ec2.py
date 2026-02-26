@@ -592,7 +592,8 @@ print("WHY:\n  1) Verify overall generalization.\n"
 print("HOW:\n  1) Load best model checkpoint.\n"
       "  2) Run validation_loop with class_metrics=True.\n"
       "  3) Collect all labels and probabilities to compute mAP.\n"
-      "  4) Print overall and per-class metrics.\n")
+      "  4) Compute micro-F1 (global) and macro-F1 (class-wise average).\n"
+      "  5) Print overall and per-class metrics.\n")
 
 # Load best model checkpoint
 model.load_state_dict(torch.load(best_model_path, map_location=device))
@@ -612,10 +613,10 @@ val_results, val_class_results = validation_loop(
     class_metrics=True
 )
 
-# Extract metrics
+# Extract metrics with proper F1 distinction
 avg_val_loss = val_results["loss"]
-micro_f1 = val_results["f1"]
-macro_f1 = val_results["f1"]  # weighted by class frequency
+micro_f1 = val_results["micro_f1"]  # global F1 across all samples and classes
+macro_f1 = val_results["macro_f1"]  # average of per-class F1 scores
 accuracy = val_results["accuracy"]
 
 # -----------------------------
@@ -639,8 +640,8 @@ mAP_val = average_precision_score(all_labels, all_probs, average='macro')
 # -----------------------------
 print(f"✔ Validation Loss  : {avg_val_loss:.4f}")
 print(f"✔ Validation Acc   : {accuracy:.4f}")
-print(f"✔ Micro F1         : {micro_f1:.4f}")
-print(f"✔ Macro F1         : {macro_f1:.4f}")
+print(f"✔ Micro F1         : {micro_f1:.4f}  (global over all samples/classes)")
+print(f"✔ Macro F1         : {macro_f1:.4f}  (average of per-class F1)")
 print(f"✔ mAP              : {mAP_val:.4f}\n")
 
 print("✔ Class-wise Validation Metrics:")
