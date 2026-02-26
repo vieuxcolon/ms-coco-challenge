@@ -357,10 +357,6 @@ print(f"✔ Validation batches: {len(val_loader)}")
 print(f"✔ Test batches: {len(test_loader)}\n")
 
 # ==========================================================
-# END OF STEP 4 (FINAL PRODUCTION VERSION)
-# ==========================================================
-
-# ==========================================================
 # STEP 5/14: MODEL SETUP
 # ==========================================================
 print("Step 5/14: Model Architecture Setup")
