@@ -516,6 +516,9 @@ print("WHAT:\n  Train and validate the model while saving only the best model.")
 print("WHY:\n  Preserve the model with the lowest validation loss, avoiding unnecessary checkpoints.")
 print("HOW:\n  Forward → compute loss → backward → optimizer → AMP → validate → update scheduler → save best model.\n")
 
+# placeholder best model path
+best_model_path = "best_model.pth"
+
 for epoch in range(1, EPOCHS + 1):
     epoch_start_time = datetime.now()
     print(f"\n================ Epoch {epoch}/{EPOCHS} ================")
