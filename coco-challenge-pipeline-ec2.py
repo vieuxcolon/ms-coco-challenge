@@ -163,28 +163,27 @@ val_transform = transforms.Compose([
 print("✔ Transforms defined for train and validation/test.\n")
 
 # ==========================================================
-# STEP 4A/14: Dataset Paths & Local Copy (EC2)
+# STEP 4A/14: Dataset Extraction (EC2)
 # ==========================================================
-
-print("Step 4A/14: Dataset Paths & Local Copy")
+print("\nStep 4A/14: Dataset Extraction (EC2)")
 print("--------------------------------------")
-print("WHAT:\n  Define local EC2 paths for MS COCO datasets and copy zip files from drive.")
-print("WHY:\n  Local disk access is faster than network storage, avoids runtime errors, "
-      "and ensures deterministic extraction in Step 4B.")
-print("HOW:\n  1. Set ROOT_DIR for local disk\n"
-      "  2. Define full paths to train/test image zips and labels\n"
-      "  3. Copy files from Google Drive (or pre-copied) to ROOT_DIR\n"
-      "  4. Ensure target directories exist.\n")
+print("WHAT:\n  Ensure MS COCO dataset files are extracted and properly organized.")
+print("WHY:\n  1) Flatten nested folders for deterministic training.\n"
+      "  2) Prepare target directories compatible with Step 4B.\n"
+      "  3) Avoid runtime errors due to missing images or labels.\n")
+print("HOW:\n  1) Check target directories.\n"
+      "  2) Unzip datasets only if needed.\n"
+      "  3) Flatten any number of nested subdirectories.\n"
+      "  4) Prepare train, validation, and test folders.\n")
 
 import os
+import zipfile
 import shutil
 
 # ---------------------------
-# Local EC2 storage
+# Dataset paths
 # ---------------------------
 ROOT_DIR = "/home/ubuntu/data"
-os.makedirs(ROOT_DIR, exist_ok=True)
-
 TRAIN_IMG_ZIP   = os.path.join(ROOT_DIR, "train-resized.zip")
 TEST_IMG_ZIP    = os.path.join(ROOT_DIR, "test-resized.zip")
 TRAIN_LABEL_ZIP = os.path.join(ROOT_DIR, "train.zip")
@@ -193,31 +192,68 @@ TRAIN_IMG_DIR   = os.path.join(ROOT_DIR, "images/train")
 TRAIN_LABEL_DIR = os.path.join(ROOT_DIR, "labels/train")
 TEST_IMG_DIR    = os.path.join(ROOT_DIR, "images/test")
 
-os.makedirs(TRAIN_IMG_DIR, exist_ok=True)
-os.makedirs(TRAIN_LABEL_DIR, exist_ok=True)
-os.makedirs(TEST_IMG_DIR, exist_ok=True)
+# ---------------------------
+# Utility Functions
+# ---------------------------
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
 
-# ---------------------------
-# Optional: Copy zip files from pre-mounted Drive / user input
-# ---------------------------
-def copy_zip_if_missing(src, dst):
-    """Copy zip file only if not already present locally"""
-    if os.path.exists(dst):
-        print(f"✔ {os.path.basename(dst)} already exists locally.")
+def dir_ready(path):
+    """Check if directory exists and contains files"""
+    return os.path.exists(path) and len(os.listdir(path)) > 0
+
+def unzip_and_flatten_ec2(zip_path, target_dir, allowed_exts=None):
+    """
+    Extract zip into target_dir and flatten all nested folders.
+    - allowed_exts: tuple of allowed file extensions (e.g., ('.jpg', '.cls'))
+    """
+    if dir_ready(target_dir):
+        print(f"✔ {target_dir} already prepared → skipping extraction.")
         return
-    if not os.path.exists(src):
-        raise FileNotFoundError(f"❌ Source file not found: {src}")
-    print(f"⚡ Copying {os.path.basename(src)} → {dst}")
-    shutil.copy(src, dst)
-    print(f"✔ Copy complete: {dst}\n")
 
-# Example usage (user may adjust src if already copied manually)
-# GDRIVE_DATA_DIR = "/mnt/gdrive/ms-coco"
-# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train-resized.zip"), TRAIN_IMG_ZIP)
-# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "test-resized.zip"), TEST_IMG_ZIP)
-# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train.zip"), TRAIN_LABEL_ZIP)
+    temp_dir = target_dir + "_tmp"
+    ensure_dir(temp_dir)
+    print(f"⚡ Extracting {zip_path} → {temp_dir}")
 
-print("✔ Dataset paths defined and local directories ready.\n")
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(temp_dir)
+
+    ensure_dir(target_dir)
+    moved_files = 0
+
+    # Walk through all nested directories
+    for root, _, files in os.walk(temp_dir):
+        for file in files:
+            if allowed_exts is None or file.lower().endswith(allowed_exts):
+                src_path = os.path.join(root, file)
+                dst_path = os.path.join(target_dir, file)
+                if not os.path.exists(dst_path):
+                    shutil.move(src_path, dst_path)
+                    moved_files += 1
+
+    # Clean up temp extraction folder
+    shutil.rmtree(temp_dir)
+    print(f"✔ Consolidated {moved_files} files into {target_dir}\n")
+
+# ---------------------------
+# Ensure target directories exist
+# ---------------------------
+ensure_dir(TRAIN_IMG_DIR)
+ensure_dir(TRAIN_LABEL_DIR)
+ensure_dir(TEST_IMG_DIR)
+
+# ---------------------------
+# Extract & flatten datasets
+# ---------------------------
+unzip_and_flatten_ec2(TRAIN_IMG_ZIP, TRAIN_IMG_DIR, allowed_exts=(".jpg", ".jpeg", ".png"))
+unzip_and_flatten_ec2(TEST_IMG_ZIP, TEST_IMG_DIR, allowed_exts=(".jpg", ".jpeg", ".png"))
+unzip_and_flatten_ec2(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, allowed_exts=(".cls", ".txt"))
+
+print("✔ Dataset extraction and flattening complete for EC2.")
+print(f"✔ Train images: {len(os.listdir(TRAIN_IMG_DIR))}")
+print(f"✔ Test images : {len(os.listdir(TEST_IMG_DIR))}")
+print(f"✔ Train labels: {len(os.listdir(TRAIN_LABEL_DIR))}\n")
 
 # ==========================================================
 # STEP 4B/14: Dataset Objects, Train/Validation Split & DataLoaders
