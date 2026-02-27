@@ -161,31 +161,28 @@ val_transform = transforms.Compose([
 ])
 
 print("✔ Transforms defined for train and validation/test.\n")
-
 # ==========================================================
-# STEP 4A/14: Dataset Extraction & Consolidation (EC2)
+# STEP 4A/14: Dataset Paths & Local Copy (EC2)
 # ==========================================================
 
-print("\nStep 4A/14: Dataset Extraction & Consolidation (EC2)")
-print("-------------------------------------------------------")
-print("WHAT:\n  Deterministically unzip pre-copied MS COCO zip files into local directories,"
-      "\n  flatten nested subdirectories, and prepare for dataset usage.\n")
-print("WHY:\n  1. Ensures local dataset is structured correctly for training."
-      "\n  2. Prevents corruption from nested zip subdirectories."
-      "\n  3. Keeps train/validation splits compatible with downstream pipeline.\n")
-print("HOW:\n  1. Verify local zip files exist."
-      "\n  2. Recursively extract and consolidate files by extension."
-      "\n  3. Prepare folders for training, validation, and test images/labels.\n")
+print("Step 4A/14: Dataset Paths & Local Copy")
+print("--------------------------------------")
+print("WHAT:\n  Define local EC2 paths for MS COCO datasets and copy zip files from drive.")
+print("WHY:\n  Local disk access is faster than network storage, avoids runtime errors, "
+      "and ensures deterministic extraction in Step 4B.")
+print("HOW:\n  1. Set ROOT_DIR for local disk\n"
+      "  2. Define full paths to train/test image zips and labels\n"
+      "  3. Copy files from Google Drive (or pre-copied) to ROOT_DIR\n"
+      "  4. Ensure target directories exist.\n")
 
 import os
 import shutil
-import zipfile
-from glob import glob
 
-# ----------------------------
-# Local dataset paths
-# ----------------------------
+# ---------------------------
+# Local EC2 storage
+# ---------------------------
 ROOT_DIR = "/home/ubuntu/data"
+os.makedirs(ROOT_DIR, exist_ok=True)
 
 TRAIN_IMG_ZIP   = os.path.join(ROOT_DIR, "train-resized.zip")
 TEST_IMG_ZIP    = os.path.join(ROOT_DIR, "test-resized.zip")
@@ -195,75 +192,92 @@ TRAIN_IMG_DIR   = os.path.join(ROOT_DIR, "images/train")
 TRAIN_LABEL_DIR = os.path.join(ROOT_DIR, "labels/train")
 TEST_IMG_DIR    = os.path.join(ROOT_DIR, "images/test")
 
-# Ensure directories exist
-for d in [TRAIN_IMG_DIR, TRAIN_LABEL_DIR, TEST_IMG_DIR]:
-    os.makedirs(d, exist_ok=True)
+os.makedirs(TRAIN_IMG_DIR, exist_ok=True)
+os.makedirs(TRAIN_LABEL_DIR, exist_ok=True)
+os.makedirs(TEST_IMG_DIR, exist_ok=True)
 
-# ----------------------------
-# Deterministic unzip + consolidation
-# ----------------------------
-def dir_ready(path, ext):
-    return os.path.exists(path) and len(glob(os.path.join(path, f"*{ext}"))) > 0
+# ---------------------------
+# Optional: Copy zip files from pre-mounted Drive / user input
+# ---------------------------
+def copy_zip_if_missing(src, dst):
+    """Copy zip file only if not already present locally"""
+    if os.path.exists(dst):
+        print(f"✔ {os.path.basename(dst)} already exists locally.")
+        return
+    if not os.path.exists(src):
+        raise FileNotFoundError(f"❌ Source file not found: {src}")
+    print(f"⚡ Copying {os.path.basename(src)} → {dst}")
+    shutil.copy(src, dst)
+    print(f"✔ Copy complete: {dst}\n")
 
-def unzip_and_consolidate(zip_path, target_dir, extension):
-    if dir_ready(target_dir, extension):
+# Example usage (user may adjust src if already copied manually)
+# GDRIVE_DATA_DIR = "/mnt/gdrive/ms-coco"
+# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train-resized.zip"), TRAIN_IMG_ZIP)
+# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "test-resized.zip"), TEST_IMG_ZIP)
+# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train.zip"), TRAIN_LABEL_ZIP)
+
+print("✔ Dataset paths defined and local directories ready.\n")
+
+# ==========================================================
+# STEP 4B/14: Dataset Objects, Train/Validation Split & DataLoaders
+# ==========================================================
+
+print("Step 4B/14: Dataset Objects, Safe Split & DataLoaders")
+print("-----------------------------------------------------")
+print("WHAT:\n  Extract zip files, flatten nested folders, create PyTorch datasets and DataLoaders.")
+print("WHY:\n  Deterministic extraction ensures reproducibility, train/validation split prevents data leakage,"
+      "\n  and GPU-optimized DataLoaders maximize throughput.")
+print("HOW:\n  1. Unzip and consolidate images/labels\n"
+      "  2. Define dataset classes\n"
+      "  3. Apply train/validation transforms\n"
+      "  4. Perform 80/20 train/val split\n"
+      "  5. Build DataLoaders with pin_memory and persistent_workers.\n")
+
+import zipfile
+from glob import glob
+from pathlib import Path
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader, Subset
+
+# ---------------------------
+# Helper: unzip and flatten
+# ---------------------------
+def unzip_and_flatten(zip_path, target_dir, extension):
+    """Extract zip to target_dir and consolidate files with given extension."""
+    if os.path.exists(target_dir) and len(glob(f"{target_dir}/*{extension}")) > 0:
         print(f"✔ {target_dir} already prepared → skipping extraction.")
         return
 
-    if not os.path.exists(zip_path):
-        raise FileNotFoundError(f"❌ Missing zip file: {zip_path}")
-
-    print(f"⚡ Extracting {zip_path}")
     temp_dir = target_dir + "_tmp"
     os.makedirs(temp_dir, exist_ok=True)
 
+    print(f"⚡ Extracting {zip_path}")
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
 
-    print("⚡ Recursively consolidating nested directories...")
+    os.makedirs(target_dir, exist_ok=True)
     moved = 0
     for root, _, files in os.walk(temp_dir):
         for file in files:
             if file.lower().endswith(extension):
-                src = os.path.join(root, file)
                 dst = os.path.join(target_dir, file)
                 if not os.path.exists(dst):
-                    shutil.move(src, dst)
+                    shutil.move(os.path.join(root, file), dst)
                     moved += 1
     shutil.rmtree(temp_dir)
     print(f"✔ Consolidated {moved} {extension} files into {target_dir}\n")
 
-# Execute extraction for train images, test images, and train labels
-unzip_and_consolidate(TRAIN_IMG_ZIP, TRAIN_IMG_DIR, ".jpg")
-unzip_and_consolidate(TEST_IMG_ZIP, TEST_IMG_DIR, ".jpg")
-unzip_and_consolidate(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, ".cls")
+# ---------------------------
+# Extract all zips
+# ---------------------------
+unzip_and_flatten(TRAIN_IMG_ZIP, TRAIN_IMG_DIR, ".jpg")
+unzip_and_flatten(TEST_IMG_ZIP, TEST_IMG_DIR, ".jpg")
+unzip_and_flatten(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, ".cls")
 
-print("✔ Dataset extraction & consolidation completed.\n")
-
-# ==========================================================
-# STEP 4B/14: Dataset Objects & DataLoaders (EC2)
-# ==========================================================
-
-print("\nStep 4B/14: Dataset Objects & GPU-Optimized DataLoaders")
-print("---------------------------------------------------------")
-print("WHAT:\n  Create PyTorch Dataset objects for training, validation, and test sets,"
-      "\n  apply transforms, and prepare DataLoaders optimized for GPU usage.\n")
-print("WHY:\n  1. Structured Dataset objects allow batch loading with augmentation."
-      "\n  2. Train/validation split ensures no data leakage."
-      "\n  3. DataLoaders with pin_memory and multiple workers maximize GPU throughput.\n")
-print("HOW:\n  1. Define Dataset classes for train (multi-label) and test (images only)."
-      "\n  2. Split training dataset into train/validation subsets deterministically."
-      "\n  3. Apply transforms separately for train/validation."
-      "\n  4. Build DataLoaders for train, validation, and test sets.\n")
-
-import torch
-from torch.utils.data import Dataset, DataLoader, Subset
-from pathlib import Path
-from PIL import Image
-
-# ----------------------------
-# Dataset classes
-# ----------------------------
+# ---------------------------
+# Dataset Classes
+# ---------------------------
 class COCOTrainImageDataset(Dataset):
     """MS COCO Training Dataset for multi-label classification"""
     def __init__(self, img_dir, annotations_dir, transform=None):
@@ -308,10 +322,11 @@ class COCOTestImageDataset(Dataset):
             image = self.transform(image)
         return image, Path(img_path).stem
 
-# ----------------------------
-# Train/Validation Split
-# ----------------------------
-print("Applying deterministic train/validation split...")
+# ---------------------------
+# Safe Train/Validation Split
+# ---------------------------
+print("Applying safe train/validation split with independent transforms...")
+
 base_dataset = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, transform=None)
 total_size = len(base_dataset)
 train_size = int(0.8 * total_size)
@@ -329,22 +344,26 @@ val_dataset_full   = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, trans
 train_dataset = Subset(train_dataset_full, train_indices)
 val_dataset   = Subset(val_dataset_full, val_indices)
 
-# ----------------------------
+# ---------------------------
 # GPU-Optimized DataLoaders
-# ----------------------------
-train_loader = DataLoader(train_dataset,
-                          batch_size=BATCH_SIZE,
-                          shuffle=True,
-                          num_workers=4,
-                          pin_memory=True,
-                          persistent_workers=True)
+# ---------------------------
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=True,
+    persistent_workers=True
+)
 
-val_loader = DataLoader(val_dataset,
-                        batch_size=BATCH_SIZE,
-                        shuffle=False,
-                        num_workers=4,
-                        pin_memory=True,
-                        persistent_workers=True)
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=True,
+    persistent_workers=True
+)
 
 test_loader = DataLoader(
     COCOTestImageDataset(TEST_IMG_DIR, transform=val_transform),
@@ -355,11 +374,9 @@ test_loader = DataLoader(
     persistent_workers=True
 )
 
-# ----------------------------
+# ---------------------------
 # Dataset Summary
-# ----------------------------
-import pandas as pd
-
+# ---------------------------
 dataset_summary = pd.DataFrame({
     "Component": [
         "Total Training Samples",
