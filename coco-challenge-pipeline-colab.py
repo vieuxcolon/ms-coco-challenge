@@ -86,21 +86,41 @@ print("✔ Global dependencies defined successfully.\n")
 # ==========================================================
 # STEP 2/14: HYPERPARAMETERS & GLOBAL VARIABLES
 # ==========================================================
+
 print("Step 2/14: Hyperparameters & Globals")
 print("------------------------------------")
-print("WHAT:\n  Define training hyperparameters, thresholds, paths, and number of classes.")
-print("WHY:\n  Centralized configuration simplifies adjustments and ensures consistency.")
-print("HOW:\n  Set batch size, learning rate, epochs, number of classes, threshold, image size.\n")
+print("WHAT:\n  Define core training hyperparameters and model configuration.")
+print("WHY:\n  Centralized configuration ensures consistency across all steps\n"
+      "  and simplifies experimentation and tuning.")
+print("HOW:\n  Set batch size, learning rate, epochs, image size,\n"
+      "  classification threshold, and backbone training policy.\n")
 
+# ----------------------------------------------------------
+# Training Hyperparameters
+# ----------------------------------------------------------
 BATCH_SIZE = 16
 LEARNING_RATE = 2e-4
 EPOCHS = 25
-NUM_CLASSES = 80  # MS COCO classes
-THRESHOLD = 0.5
-IMG_SIZE = 300
-FREEZE_BACKBONE = False
-DRIVE_ROOT = "/content/drive/MyDrive/ML_Experiments"  # EC2 or Google Drive path
 
+# ----------------------------------------------------------
+# Model / Input Configuration
+# ----------------------------------------------------------
+IMG_SIZE = 300            # Must match EfficientNet-B3 input size
+THRESHOLD = 0.5           # Multi-label sigmoid threshold
+FREEZE_BACKBONE = False   # If True → only classifier head trains
+
+# ----------------------------------------------------------
+# Training Behavior Flags
+# ----------------------------------------------------------
+USE_AMP = torch.cuda.is_available()  # Enable mixed precision only if GPU
+MULTI_LABEL = True                   # MS COCO is multi-label
+
+print(f"✔ Batch size: {BATCH_SIZE}")
+print(f"✔ Learning rate: {LEARNING_RATE}")
+print(f"✔ Epochs: {EPOCHS}")
+print(f"✔ Image size: {IMG_SIZE}")
+print(f"✔ Mixed Precision Enabled: {USE_AMP}")
+print("✔ Hyperparameters initialized successfully.\n")
 
 # ==========================================================
 # STEP 3/14: TRANSFORMS
@@ -111,73 +131,59 @@ print("WHAT:\n  Define image transforms for training and validation/test sets.")
 print("WHY:\n  Augmentation improves generalization; validation uses only normalization to reflect real data.")
 print("HOW:\n  Use torchvision transforms with Resize, Normalize, RandomFlip, Rotation, ColorJitter.\n")
 
+# ---------------------------
+# Centralized normalization (reusable)
+# ---------------------------
+imagenet_norm = transforms.Normalize(
+    mean=[0.485, 0.456, 0.406],
+    std=[0.229, 0.224, 0.225]
+)
+
+# ---------------------------
+# Training transforms
+# ---------------------------
 train_transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(15),
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+    imagenet_norm
 ])
 
+# ---------------------------
+# Validation / Test transforms
+# ---------------------------
 val_transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+    imagenet_norm
 ])
+
 print("✔ Transforms defined for train and validation/test.\n")
 
 # ==========================================================
-# STEP 4/14: Dataset Preparation & DataLoaders (Colab)
+# STEP 4A/14: Dataset Paths & Local Copy (EC2)
 # ==========================================================
-print("\nStep 4/14: Dataset & DataLoaders Setup (Colab Version)")
-print("-------------------------------------------------------")
-print("WHAT:\n  Mount Google Drive, unzip MS COCO zip files locally,"
-      "\n  safely flatten nested subdirectories,"
-      "\n  split into train/validation subsets without leakage,"
-      "\n  apply train/val augmentations, and prepare GPU-optimized DataLoaders.\n")
 
-print("WHY:\n  1. Training directly from Google Drive is network-bound and slow.\n"
-      "  2. Copying to local Colab disk (/content/data) maximizes GPU utilization.\n"
-      "  3. Zip files may contain arbitrary nested sub-subdirectories.\n"
-      "  4. Deterministic consolidation prevents dataset corruption.\n"
-      "  5. Train and validation must use independent dataset instances.\n"
-      "  6. Preserve full compatibility with Steps 5–14 pipeline.\n")
+print("Step 4A/14: Dataset Paths & Local Copy")
+print("--------------------------------------")
+print("WHAT:\n  Define local EC2 paths for MS COCO datasets and copy zip files from drive.")
+print("WHY:\n  Local disk access is faster than network storage, avoids runtime errors, "
+      "and ensures deterministic extraction in Step 4B.")
+print("HOW:\n  1. Set ROOT_DIR for local disk\n"
+      "  2. Define full paths to train/test image zips and labels\n"
+      "  3. Copy files from Google Drive (or pre-copied) to ROOT_DIR\n"
+      "  4. Ensure target directories exist.\n")
 
-print("HOW:\n  1. Mount Google Drive with force_remount to ensure credentials.\n"
-      "  2. Copy/unzip zip files → flatten nested directories.\n"
-      "  3. Create independent dataset objects for train/val with transforms.\n"
-      "  4. Build GPU-optimized DataLoaders.\n")
+import os
+import shutil
 
-# ==========================================================
-# 1️⃣ GOOGLE DRIVE MOUNT (COLAB)
-# ==========================================================
-try:
-    from google.colab import drive
-    drive.mount('/content/drive', force_remount=True)
-    print("✔ Google Drive mounted successfully at /content/drive")
-except Exception as e:
-    print(f"⚠ Google Drive mount failed: {e}")
-    print("Make sure you run this cell in a Colab environment and follow the auth prompt.")
-
-# ==========================================================
-# 2️⃣ DATASET PATHS
-# ==========================================================
-import os, shutil, zipfile
-from glob import glob
-from pathlib import Path
-from PIL import Image
-import torch
-from torch.utils.data import Dataset, DataLoader, Subset
-import pandas as pd
-
-ROOT_DIR = "/content/data"
+# ---------------------------
+# Local EC2 storage
+# ---------------------------
+ROOT_DIR = "/home/ubuntu/data"
 os.makedirs(ROOT_DIR, exist_ok=True)
-
-# Paths to zip files (assuming you placed them in Drive)
-DRIVE_DATA_DIR = "/content/drive/MyDrive"  # update as per your Drive path
 
 TRAIN_IMG_ZIP   = os.path.join(ROOT_DIR, "train-resized.zip")
 TEST_IMG_ZIP    = os.path.join(ROOT_DIR, "test-resized.zip")
@@ -187,64 +193,92 @@ TRAIN_IMG_DIR   = os.path.join(ROOT_DIR, "images/train")
 TRAIN_LABEL_DIR = os.path.join(ROOT_DIR, "labels/train")
 TEST_IMG_DIR    = os.path.join(ROOT_DIR, "images/test")
 
-# ==========================================================
-# 3️⃣ COPY ZIP FILES FROM DRIVE → LOCAL
-# ==========================================================
-def copy_if_needed(src, dst):
+os.makedirs(TRAIN_IMG_DIR, exist_ok=True)
+os.makedirs(TRAIN_LABEL_DIR, exist_ok=True)
+os.makedirs(TEST_IMG_DIR, exist_ok=True)
+
+# ---------------------------
+# Optional: Copy zip files from pre-mounted Drive / user input
+# ---------------------------
+def copy_zip_if_missing(src, dst):
+    """Copy zip file only if not already present locally"""
     if os.path.exists(dst):
         print(f"✔ {os.path.basename(dst)} already exists locally.")
         return
     if not os.path.exists(src):
-        raise FileNotFoundError(f"❌ Missing file in Google Drive: {src}")
-    print(f"⚡ Copying {src} → {dst}")
+        raise FileNotFoundError(f"❌ Source file not found: {src}")
+    print(f"⚡ Copying {os.path.basename(src)} → {dst}")
     shutil.copy(src, dst)
+    print(f"✔ Copy complete: {dst}\n")
 
-copy_if_needed(os.path.join(DRIVE_DATA_DIR, "train-resized.zip"), TRAIN_IMG_ZIP)
-copy_if_needed(os.path.join(DRIVE_DATA_DIR, "test-resized.zip"), TEST_IMG_ZIP)
-copy_if_needed(os.path.join(DRIVE_DATA_DIR, "train.zip"), TRAIN_LABEL_ZIP)
+# Example usage (user may adjust src if already copied manually)
+# GDRIVE_DATA_DIR = "/mnt/gdrive/ms-coco"
+# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train-resized.zip"), TRAIN_IMG_ZIP)
+# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "test-resized.zip"), TEST_IMG_ZIP)
+# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train.zip"), TRAIN_LABEL_ZIP)
+
+print("✔ Dataset paths defined and local directories ready.\n")
 
 # ==========================================================
-# 4️⃣ DETERMINISTIC UNZIP + CONSOLIDATION
+# STEP 4B/14: Dataset Objects, Train/Validation Split & DataLoaders
 # ==========================================================
-def ensure_dir(path):
-    os.makedirs(path, exist_ok=True)
 
-def dir_ready(path, ext):
-    return os.path.exists(path) and len(glob(os.path.join(path, f"*{ext}"))) > 0
+print("Step 4B/14: Dataset Objects, Safe Split & DataLoaders")
+print("-----------------------------------------------------")
+print("WHAT:\n  Extract zip files, flatten nested folders, create PyTorch datasets and DataLoaders.")
+print("WHY:\n  Deterministic extraction ensures reproducibility, train/validation split prevents data leakage,"
+      "\n  and GPU-optimized DataLoaders maximize throughput.")
+print("HOW:\n  1. Unzip and consolidate images/labels\n"
+      "  2. Define dataset classes\n"
+      "  3. Apply train/validation transforms\n"
+      "  4. Perform 80/20 train/val split\n"
+      "  5. Build DataLoaders with pin_memory and persistent_workers.\n")
 
-def unzip_and_consolidate(zip_path, target_dir, extension):
-    if dir_ready(target_dir, extension):
+import zipfile
+from glob import glob
+from pathlib import Path
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader, Subset
+
+# ---------------------------
+# Helper: unzip and flatten
+# ---------------------------
+def unzip_and_flatten(zip_path, target_dir, extension):
+    """Extract zip to target_dir and consolidate files with given extension."""
+    if os.path.exists(target_dir) and len(glob(f"{target_dir}/*{extension}")) > 0:
         print(f"✔ {target_dir} already prepared → skipping extraction.")
         return
 
-    print(f"⚡ Extracting {zip_path}")
     temp_dir = target_dir + "_tmp"
-    ensure_dir(temp_dir)
+    os.makedirs(temp_dir, exist_ok=True)
 
+    print(f"⚡ Extracting {zip_path}")
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
 
-    print("⚡ Recursively consolidating nested directories...")
-    ensure_dir(target_dir)
+    os.makedirs(target_dir, exist_ok=True)
     moved = 0
     for root, _, files in os.walk(temp_dir):
         for file in files:
             if file.lower().endswith(extension):
-                src = os.path.join(root, file)
                 dst = os.path.join(target_dir, file)
                 if not os.path.exists(dst):
-                    shutil.move(src, dst)
+                    shutil.move(os.path.join(root, file), dst)
                     moved += 1
     shutil.rmtree(temp_dir)
     print(f"✔ Consolidated {moved} {extension} files into {target_dir}\n")
 
-unzip_and_consolidate(TRAIN_IMG_ZIP, TRAIN_IMG_DIR, ".jpg")
-unzip_and_consolidate(TEST_IMG_ZIP, TEST_IMG_DIR, ".jpg")
-unzip_and_consolidate(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, ".cls")
+# ---------------------------
+# Extract all zips
+# ---------------------------
+unzip_and_flatten(TRAIN_IMG_ZIP, TRAIN_IMG_DIR, ".jpg")
+unzip_and_flatten(TEST_IMG_ZIP, TEST_IMG_DIR, ".jpg")
+unzip_and_flatten(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR, ".cls")
 
-# ==========================================================
-# 5️⃣ DATASET CLASSES
-# ==========================================================
+# ---------------------------
+# Dataset Classes
+# ---------------------------
 class COCOTrainImageDataset(Dataset):
     """MS COCO Training Dataset for multi-label classification"""
     def __init__(self, img_dir, annotations_dir, transform=None):
@@ -261,6 +295,7 @@ class COCOTrainImageDataset(Dataset):
         img_path = os.path.join(self.img_dir, img_name)
 
         image = Image.open(img_path).convert("RGB")
+
         with open(label_path, 'r') as f:
             labels = [int(label.strip()) for label in f.readlines()]
 
@@ -288,10 +323,11 @@ class COCOTestImageDataset(Dataset):
             image = self.transform(image)
         return image, Path(img_path).stem
 
-# ==========================================================
-# 6️⃣ SAFE TRAIN / VALIDATION SPLIT + AUGMENTATIONS
-# ==========================================================
+# ---------------------------
+# Safe Train/Validation Split
+# ---------------------------
 print("Applying safe train/validation split with independent transforms...")
+
 base_dataset = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, transform=None)
 total_size = len(base_dataset)
 train_size = int(0.8 * total_size)
@@ -299,6 +335,7 @@ val_size = total_size - train_size
 
 generator = torch.Generator().manual_seed(SEED)
 indices = torch.randperm(total_size, generator=generator)
+
 train_indices = indices[:train_size]
 val_indices   = indices[train_size:]
 
@@ -308,22 +345,26 @@ val_dataset_full   = COCOTrainImageDataset(TRAIN_IMG_DIR, TRAIN_LABEL_DIR, trans
 train_dataset = Subset(train_dataset_full, train_indices)
 val_dataset   = Subset(val_dataset_full, val_indices)
 
-# ==========================================================
-# 7️⃣ GPU-OPTIMIZED DATALOADERS
-# ==========================================================
-train_loader = DataLoader(train_dataset,
-                          batch_size=BATCH_SIZE,
-                          shuffle=True,
-                          num_workers=4,
-                          pin_memory=True,
-                          persistent_workers=True)
+# ---------------------------
+# GPU-Optimized DataLoaders
+# ---------------------------
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=True,
+    persistent_workers=True
+)
 
-val_loader = DataLoader(val_dataset,
-                        batch_size=BATCH_SIZE,
-                        shuffle=False,
-                        num_workers=4,
-                        pin_memory=True,
-                        persistent_workers=True)
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=True,
+    persistent_workers=True
+)
 
 test_loader = DataLoader(
     COCOTestImageDataset(TEST_IMG_DIR, transform=val_transform),
@@ -334,9 +375,9 @@ test_loader = DataLoader(
     persistent_workers=True
 )
 
-# ==========================================================
-# 8️⃣ DATASET SUMMARY
-# ==========================================================
+# ---------------------------
+# Dataset Summary
+# ---------------------------
 dataset_summary = pd.DataFrame({
     "Component": [
         "Total Training Samples",
@@ -358,12 +399,13 @@ dataset_summary = pd.DataFrame({
         f"{IMG_SIZE}x{IMG_SIZE}",
         "Flip + Rotation + ColorJitter",
         "Resize + Normalize Only",
-        "Google Drive → Local Colab Disk (Deterministic Consolidation)"
+        "Local EC2 Disk (Deterministic Consolidation)"
     ]
 })
 
 print("\nDataset Summary:")
 print(dataset_summary)
+
 print(f"\n✔ DataLoaders created successfully.")
 print(f"✔ Train batches: {len(train_loader)}")
 print(f"✔ Validation batches: {len(val_loader)}")
@@ -372,6 +414,7 @@ print(f"✔ Test batches: {len(test_loader)}\n")
 # ==========================================================
 # STEP 5/14: MODEL SETUP
 # ==========================================================
+
 print("Step 5/14: Model Architecture Setup")
 print("------------------------------------")
 print("WHAT:\n  Load pretrained EfficientNet-B3 and adapt classifier head")
@@ -381,17 +424,17 @@ print("  accelerating convergence and improving generalization.\n")
 print("HOW:\n  Load official pretrained weights → optionally freeze backbone →"
       " replace classifier layer → move model to GPU.\n")
 
-# -----------------------------
-# Load EfficientNet-B3
-# -----------------------------
+# ----------------------------------------------------------
+# Load EfficientNet-B3 with pretrained ImageNet weights
+# ----------------------------------------------------------
 from torchvision.models import efficientnet_b3, EfficientNet_B3_Weights
 
 weights = EfficientNet_B3_Weights.DEFAULT
 model = efficientnet_b3(weights=weights)
 
-# -----------------------------
+# ----------------------------------------------------------
 # Optional Backbone Freezing
-# -----------------------------
+# ----------------------------------------------------------
 if FREEZE_BACKBONE:
     for param in model.features.parameters():
         param.requires_grad = False
@@ -399,18 +442,20 @@ if FREEZE_BACKBONE:
 else:
     print("✔ Full fine-tuning enabled (backbone + classifier).")
 
-# -----------------------------
-# Replace Classification Head
-# -----------------------------
+# ----------------------------------------------------------
+# Replace Classification Head for NUM_CLASSES output
+# ----------------------------------------------------------
 in_features = model.classifier[1].in_features
 model.classifier[1] = nn.Linear(in_features, NUM_CLASSES)
 
-# Move to device
+# ----------------------------------------------------------
+# Move model to device
+# ----------------------------------------------------------
 model = model.to(device)
 
-# -----------------------------
+# ----------------------------------------------------------
 # Model Summary
-# -----------------------------
+# ----------------------------------------------------------
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 print("\nModel Summary:")
@@ -433,29 +478,26 @@ print("HOW:\n  1) Compute per-class positive frequencies from training set.\n"
       "  2) Derive pos_weight = num_negatives / (num_positives + epsilon) → optionally apply smoothing.\n"
       "  3) Apply nn.BCEWithLogitsLoss with pos_weight on GPU.\n")
 
-# Placeholder criterion
-criterion = nn.BCEWithLogitsLoss()
-
 # -----------------------------
 # Compute Class Frequencies
 # -----------------------------
 print("Computing class frequency statistics...")
 
-num_positives = torch.zeros(NUM_CLASSES, device=device)
+num_positives = torch.zeros(NUM_CLASSES, device=device, dtype=torch.float32)
 num_samples = 0
 
 for _, labels in train_loader:
-    labels = labels.to(device)
+    labels = labels.float().to(device)
     num_positives += labels.sum(dim=0)
     num_samples += labels.size(0)
 
 num_negatives = num_samples - num_positives
 
-# Optional smoothing to avoid extreme weights for very rare/very common classes
+# Optional smoothing to avoid extreme weights
 epsilon = 1e-6
-smooth_factor = 0.05  # rec #3: small additive smoothing
+smooth_factor = 0.05
 pos_weight = (num_negatives + smooth_factor) / (num_positives + smooth_factor + epsilon)
-pos_weight = pos_weight.to(device)
+pos_weight = torch.clamp(pos_weight, max=10.0).to(device)  # optional clipping
 
 # -----------------------------
 # Define Loss
@@ -481,7 +523,7 @@ print("HOW:\n  Use AdamW optimizer with ReduceLROnPlateau scheduler.\n")
 
 # ---------------- Optimizer ----------------
 optimizer = optim.AdamW(
-    model.parameters(),
+    filter(lambda p: p.requires_grad, model.parameters()),  # respects FREEZE_BACKBONE
     lr=LEARNING_RATE,
     weight_decay=1e-4
 )
@@ -491,8 +533,16 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode='min',
     factor=0.5,
-    patience=2
+    patience=2,
+    verbose=True
 )
+
+# ---------------- AMP Setup ----------------
+scaler = GradScaler(enabled=USE_AMP)  # Automatic Mixed Precision if GPU available
+
+# ---------------- Tracking ----------------
+training_log = []          # per-epoch metrics
+best_val_loss = float("inf")  # track best validation loss
 
 print("Optimizer & Scheduler Summary:")
 print(f"  Optimizer       : AdamW")
@@ -500,12 +550,8 @@ print(f"  Learning Rate   : {LEARNING_RATE}")
 print(f"  Weight Decay    : 1e-4")
 print(f"  Scheduler       : ReduceLROnPlateau")
 print(f"  LR Reduction    : factor=0.5 after 2 stagnant epochs")
-print("✔ Optimizer and scheduler initialized.\n")
-
-# ---------------- AMP Setup ----------------
-scaler = GradScaler()  # Automatic Mixed Precision
-training_log = []      # Track per-epoch metrics
-best_val_loss = float("inf")  # Track best validation loss
+print(f"  AMP Enabled     : {USE_AMP}")
+print("✔ Optimizer, scheduler, and AMP initialized.\n")
 
 # ==========================================================
 # STEP 8/14: TRAINING + VALIDATION (BEST MODEL SAVING)
@@ -516,8 +562,6 @@ print("WHAT:\n  Train and validate the model while saving only the best model.")
 print("WHY:\n  Preserve the model with the lowest validation loss, avoiding unnecessary checkpoints.")
 print("HOW:\n  Forward → compute loss → backward → optimizer → AMP → validate → update scheduler → save best model.\n")
 
-
-# placeholder best model path
 best_model_path = "best_model.pth"
 
 for epoch in range(1, EPOCHS + 1):
@@ -540,8 +584,7 @@ for epoch in range(1, EPOCHS + 1):
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-
-        with autocast():
+        with autocast(enabled=USE_AMP):
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -559,31 +602,28 @@ for epoch in range(1, EPOCHS + 1):
     print("-----------------------")
     print("WHAT: Evaluate model on validation set.")
     print("WHY: Monitor overfitting and guide scheduler adjustments.")
-    print("HOW: Forward pass → compute loss → compute metrics.\n")
+    print("HOW: Forward pass → compute loss → micro/macro F1 → optional class metrics.\n")
 
-    model.eval()
-    val_loss = 0.0
-    correct_preds = 0
-    total_samples = 0
+    val_results, _ = validation_loop(
+        val_loader,
+        model,
+        criterion,
+        NUM_CLASSES,
+        device,
+        multi_label=MULTI_LABEL,
+        th_multi_label=THRESHOLD,
+        class_metrics=False  # Skip per-class metrics during training for speed
+    )
 
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images = images.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            val_loss += loss.item()
-
-            predicted = (outputs.sigmoid() > THRESHOLD).float()
-            correct_preds += (predicted == labels).sum().item()
-            total_samples += labels.numel()
-
-    avg_val_loss = val_loss / len(val_loader)
-    accuracy = correct_preds / total_samples
+    avg_val_loss = val_results["loss"]
+    accuracy = val_results["accuracy"]
+    micro_f1 = val_results["micro_f1"]
+    macro_f1 = val_results["macro_f1"]
 
     print(f"✔ Validation Loss: {avg_val_loss:.4f}")
     print(f"✔ Validation Accuracy: {accuracy:.4f}")
+    print(f"✔ Micro F1: {micro_f1:.4f}")
+    print(f"✔ Macro F1: {macro_f1:.4f}")
 
     # ---------------- Scheduler Step ----------------
     scheduler.step(avg_val_loss)
@@ -592,26 +632,27 @@ for epoch in range(1, EPOCHS + 1):
     # ---------------- Best Model Saving ----------------
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
-        torch.save(model.state_dict(), "best_model.pth")
+        torch.save(model.state_dict(), best_model_path)
         print("✔ New best model saved!\n")
 
     epoch_end_time = datetime.now()
     print(f"⏱ Epoch end time  : {epoch_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"⏱ Epoch duration  : {(epoch_end_time - epoch_start_time)}\n")
 
-    # Track metrics including timestamps
+    # Track metrics
     training_log.append({
         "epoch": epoch,
         "train_loss": avg_train_loss,
         "val_loss": avg_val_loss,
         "val_accuracy": accuracy,
+        "micro_f1": micro_f1,
+        "macro_f1": macro_f1,
         "epoch_start_time": epoch_start_time.strftime("%Y-%m-%d %H:%M:%S"),
         "epoch_end_time": epoch_end_time.strftime("%Y-%m-%d %H:%M:%S"),
         "epoch_duration": str(epoch_end_time - epoch_start_time)
     })
 
-print("✔ Training completed. Best model stored as 'best_model.pth'.")
-
+print(f"✔ Training completed. Best model stored as '{best_model_path}'.")
 
 # ==========================================================
 # STEP 9/14: FINAL VALIDATION METRICS
@@ -624,53 +665,30 @@ print("WHY:\n  1) Verify overall generalization.\n"
       "  3) Prepare comprehensive metrics for experiment logging.")
 print("HOW:\n  1) Load best model checkpoint.\n"
       "  2) Run validation_loop with class_metrics=True.\n"
-      "  3) Collect all labels and probabilities to compute mAP.\n"
-      "  4) Compute micro-F1 (global) and macro-F1 (class-wise average).\n"
-      "  5) Print overall and per-class metrics.\n")
+      "  3) Compute per-class metrics and mAP.\n")
 
-# placeholder for validation loop function
-def validation_loop(loader, model, criterion, num_classes, device, multi_label=True, th_multi_label=0.5, class_metrics=False):
-    """
-    Dummy placeholder: Replace with your actual validation loop.
-    Should return (val_results, val_class_results)
-    val_results = dict(loss=..., f1=..., accuracy=...)
-    val_class_results = list of dicts per class: [{'f1':..., 'precision':..., 'recall':...}, ...]
-    """
-    val_results = {"loss": 0.0, "f1": 0.0, "accuracy": 0.0}
-    val_class_results = [{"f1":0.0, "precision":0.0, "recall":0.0} for _ in range(num_classes)]
-    return val_results, val_class_results
-
-
-# placeholder for class names
-classes = [f"class_{i}" for i in range(NUM_CLASSES)]
-
-# Load best model checkpoint
+# Load best model
 model.load_state_dict(torch.load(best_model_path, map_location=device))
 model.eval()
 
-# -----------------------------
-# Compute validation metrics using validation_loop
-# -----------------------------
+# Compute metrics
 val_results, val_class_results = validation_loop(
     val_loader,
     model,
     criterion,
     NUM_CLASSES,
     device,
-    multi_label=True,
+    multi_label=MULTI_LABEL,
     th_multi_label=THRESHOLD,
     class_metrics=True
 )
 
-# Extract metrics with proper F1 distinction
 avg_val_loss = val_results["loss"]
-micro_f1 = val_results["micro_f1"]  # global F1 across all samples and classes
-macro_f1 = val_results["macro_f1"]  # average of per-class F1 scores
 accuracy = val_results["accuracy"]
+micro_f1 = val_results["micro_f1"]
+macro_f1 = val_results["macro_f1"]
 
-# -----------------------------
 # Compute per-class mAP
-# -----------------------------
 all_labels, all_probs = [], []
 with torch.no_grad():
     for images, labels in val_loader:
@@ -684,15 +702,14 @@ all_labels = torch.cat(all_labels).numpy()
 all_probs = torch.cat(all_probs).numpy()
 mAP_val = average_precision_score(all_labels, all_probs, average='macro')
 
-# -----------------------------
-# Print metrics
-# -----------------------------
-print(f"✔ Validation Loss  : {avg_val_loss:.4f}")
+# Print overall metrics
+print(f"\n✔ Validation Loss  : {avg_val_loss:.4f}")
 print(f"✔ Validation Acc   : {accuracy:.4f}")
-print(f"✔ Micro F1         : {micro_f1:.4f}  (global over all samples/classes)")
-print(f"✔ Macro F1         : {macro_f1:.4f}  (average of per-class F1)")
+print(f"✔ Micro F1         : {micro_f1:.4f}")
+print(f"✔ Macro F1         : {macro_f1:.4f}")
 print(f"✔ mAP              : {mAP_val:.4f}\n")
 
+# Print class-wise metrics
 print("✔ Class-wise Validation Metrics:")
 for i, cls_metrics in enumerate(val_class_results):
     print(f"{classes[i]:20s} | F1: {cls_metrics['f1']:.4f} | "
@@ -710,7 +727,7 @@ print("WHY:\n  1) Final assessment on unseen data.\n"
 print("HOW:\n  1) Iterate over test_loader.\n"
       "  2) Apply sigmoid + threshold → predicted classes.\n"
       "  3) Store results in submission dictionary.\n"
-      "  4) Save as JSON to DRIVE_ROOT.\n")
+      "  4) Save as JSON to ROOT_DIR.\n")
 
 all_probs_test, submission_dict = [], {}
 with torch.no_grad():
@@ -725,24 +742,45 @@ with torch.no_grad():
             pred_classes = [i for i, v in enumerate(probs[idx].cpu().numpy()) if v > THRESHOLD]
             submission_dict[img_id] = pred_classes
 
-# Save submission JSON
-submission_path = os.path.join(DRIVE_ROOT, "coco_test_submission.json")
+# Save submission JSON to ROOT_DIR
+submission_path = os.path.join(ROOT_DIR, "coco_test_submission.json")
 with open(submission_path, 'w') as f:
     json.dump(submission_dict, f, indent=4)
 
 print(f"✔ Test submission JSON saved to {submission_path}")
 
 # ==========================================================
-# STEP 11/14: SAVE BEST MODEL
+# STEP 11/14: POST-TRAINING & EXPERIMENT REPORT
 # ==========================================================
+print("\nStep 11/14: Post-Training Tasks & Experiment Report")
+print("----------------------------------------------------")
+print("WHAT:\n  1) Save the best model.\n"
+      "  2) Prepare an inference function for single images.\n"
+      "  3) Mark pipeline completion.\n"
+      "  4) Generate a comprehensive JSON experiment report.\n")
+print("WHY:\n  1) Preserve trained model for future inference.\n"
+      "  2) Enable reproducible predictions.\n"
+      "  3) Track all training, validation, and dataset info for traceability.\n")
+print("HOW:\n  1) Save model state_dict.\n"
+      "  2) Define predict_image() function.\n"
+      "  3) Print pipeline completion messages.\n"
+      "  4) Aggregate hyperparameters, metrics, dataset info, augmentation, class imbalance, and submission paths into JSON.\n")
+
+# ----------------------------- 
+# Save Best Model 
+# -----------------------------
 MODEL_PATH = os.path.join(DRIVE_ROOT, "efficientnet_b3_coco_best.pth")
 torch.save(model.state_dict(), MODEL_PATH)
-print(f"\n✔ Best model saved at {MODEL_PATH}")
+print(f"✔ Best model saved at {MODEL_PATH}")
 
-# ==========================================================
-# STEP 12/14: INFERENCE FUNCTION
-# ==========================================================
+# -----------------------------
+# Inference Function
+# -----------------------------
 def predict_image(model, img_path, transform, device, threshold=THRESHOLD):
+    """
+    Predicts multi-label classes for a single image.
+    Returns a list of class indices above the threshold.
+    """
     model.eval()
     image = Image.open(img_path).convert("RGB")
     image = transform(image).unsqueeze(0).to(device)
@@ -752,30 +790,15 @@ def predict_image(model, img_path, transform, device, threshold=THRESHOLD):
 
 print("✔ Inference function ready.")
 
-# ==========================================================
-# STEP 13/14: PIPELINE COMPLETION
-# ==========================================================
-print("\nStep 13/14: Pipeline Completed")
+# -----------------------------
+# Pipeline Completion Notice
+# -----------------------------
+print("\n✔ Pipeline Completed")
 print("✔ Model trained, validated, test JSON ready, inference ready.")
 
-# ==========================================================
-# STEP 14/14: JSON EXPERIMENT REPORT (WITH AUGMENTATION + POS_WEIGHT)
-# ==========================================================
-print("\nStep 14/14: JSON Experiment Report Generation")
-print("------------------------------------------------")
-print("WHAT:\n  Generate a structured report summarizing hyperparameters, model, training log, metrics, dataset info, augmentation strategies, class imbalance handling, and submission path.")
-print("WHY:\n  1) Reproducibility and traceability.\n"
-      "  2) Keeps all experiment information consolidated.\n"
-      "  3) Ready for sharing or automated logging.")
-print("HOW:\n  1) Collect hyperparameters and model details.\n"
-      "  2) Include training log.\n"
-      "  3) Add validation metrics (overall + class-wise + mAP).\n"
-      "  4) Include best model path and submission JSON path.\n"
-      "  5) Include dataset info and augmentation details.\n"
-      "  6) Include per-class positive weights used in BCEWithLogitsLoss.\n"
-      "  7) Save JSON.\n")
-
-# Convert pos_weight tensor to list for JSON
+# -----------------------------
+# JSON Experiment Report
+# -----------------------------
 pos_weight_list = pos_weight.cpu().tolist() if 'pos_weight' in globals() else None
 
 experiment_report = {
@@ -816,14 +839,13 @@ experiment_report = {
         "pos_weight": pos_weight_list,
         "description": "Inverse frequency weighting used in BCEWithLogitsLoss per class."
     },
-    "best_model_path": best_model_path,
+    "best_model_path": MODEL_PATH,
     "submission_json_path": submission_path
 }
 
-# Save JSON report
 json_output_path = os.path.join(DRIVE_ROOT, "experiment_report.json")
 with open(json_output_path, 'w') as json_file:
     json.dump(experiment_report, json_file, indent=4)
 
 print(f"✔ JSON experiment report successfully saved to {json_output_path}")
-print("✔ Report now includes hyperparameters, model info, training log, validation metrics (overall + class-wise + mAP), dataset info, augmentation strategies, class imbalance weights, and test submission path.\n")
+print("✔ Report includes hyperparameters, model info, training log, validation metrics (overall + class-wise + mAP), dataset info, augmentation strategies, class imbalance weights, and test submission path.\n")
