@@ -751,16 +751,37 @@ with open(submission_path, 'w') as f:
 print(f"✔ Test submission JSON saved to {submission_path}")
 
 # ==========================================================
-# STEP 11/14: SAVE BEST MODEL
+# STEP 11/14: POST-TRAINING & EXPERIMENT REPORT
 # ==========================================================
+print("\nStep 11/14: Post-Training Tasks & Experiment Report")
+print("----------------------------------------------------")
+print("WHAT:\n  1) Save the best model.\n"
+      "  2) Prepare an inference function for single images.\n"
+      "  3) Mark pipeline completion.\n"
+      "  4) Generate a comprehensive JSON experiment report.\n")
+print("WHY:\n  1) Preserve trained model for future inference.\n"
+      "  2) Enable reproducible predictions.\n"
+      "  3) Track all training, validation, and dataset info for traceability.\n")
+print("HOW:\n  1) Save model state_dict.\n"
+      "  2) Define predict_image() function.\n"
+      "  3) Print pipeline completion messages.\n"
+      "  4) Aggregate hyperparameters, metrics, dataset info, augmentation, class imbalance, and submission paths into JSON.\n")
+
+# ----------------------------- 
+# Save Best Model 
+# -----------------------------
 MODEL_PATH = os.path.join(DRIVE_ROOT, "efficientnet_b3_coco_best.pth")
 torch.save(model.state_dict(), MODEL_PATH)
-print(f"\n✔ Best model saved at {MODEL_PATH}")
+print(f"✔ Best model saved at {MODEL_PATH}")
 
-# ==========================================================
-# STEP 12/14: INFERENCE FUNCTION
-# ==========================================================
+# -----------------------------
+# Inference Function
+# -----------------------------
 def predict_image(model, img_path, transform, device, threshold=THRESHOLD):
+    """
+    Predicts multi-label classes for a single image.
+    Returns a list of class indices above the threshold.
+    """
     model.eval()
     image = Image.open(img_path).convert("RGB")
     image = transform(image).unsqueeze(0).to(device)
@@ -770,30 +791,15 @@ def predict_image(model, img_path, transform, device, threshold=THRESHOLD):
 
 print("✔ Inference function ready.")
 
-# ==========================================================
-# STEP 13/14: PIPELINE COMPLETION
-# ==========================================================
-print("\nStep 13/14: Pipeline Completed")
+# -----------------------------
+# Pipeline Completion Notice
+# -----------------------------
+print("\n✔ Pipeline Completed")
 print("✔ Model trained, validated, test JSON ready, inference ready.")
 
-# ==========================================================
-# STEP 14/14: JSON EXPERIMENT REPORT (WITH AUGMENTATION + POS_WEIGHT)
-# ==========================================================
-print("\nStep 14/14: JSON Experiment Report Generation")
-print("------------------------------------------------")
-print("WHAT:\n  Generate a structured report summarizing hyperparameters, model, training log, metrics, dataset info, augmentation strategies, class imbalance handling, and submission path.")
-print("WHY:\n  1) Reproducibility and traceability.\n"
-      "  2) Keeps all experiment information consolidated.\n"
-      "  3) Ready for sharing or automated logging.")
-print("HOW:\n  1) Collect hyperparameters and model details.\n"
-      "  2) Include training log.\n"
-      "  3) Add validation metrics (overall + class-wise + mAP).\n"
-      "  4) Include best model path and submission JSON path.\n"
-      "  5) Include dataset info and augmentation details.\n"
-      "  6) Include per-class positive weights used in BCEWithLogitsLoss.\n"
-      "  7) Save JSON.\n")
-
-# Convert pos_weight tensor to list for JSON
+# -----------------------------
+# JSON Experiment Report
+# -----------------------------
 pos_weight_list = pos_weight.cpu().tolist() if 'pos_weight' in globals() else None
 
 experiment_report = {
@@ -834,14 +840,14 @@ experiment_report = {
         "pos_weight": pos_weight_list,
         "description": "Inverse frequency weighting used in BCEWithLogitsLoss per class."
     },
-    "best_model_path": best_model_path,
+    "best_model_path": MODEL_PATH,
     "submission_json_path": submission_path
 }
 
-# Save JSON report
 json_output_path = os.path.join(DRIVE_ROOT, "experiment_report.json")
 with open(json_output_path, 'w') as json_file:
     json.dump(experiment_report, json_file, indent=4)
 
 print(f"✔ JSON experiment report successfully saved to {json_output_path}")
-print("✔ Report now includes hyperparameters, model info, training log, validation metrics (overall + class-wise + mAP), dataset info, augmentation strategies, class imbalance weights, and test submission path.\n")
+print("✔ Report includes hyperparameters, model info, training log, validation metrics (overall + class-wise + mAP), dataset info, augmentation strategies, class imbalance weights, and test submission path.\n")
+
