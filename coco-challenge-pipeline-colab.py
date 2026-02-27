@@ -1,65 +1,87 @@
 # ==========================================================
-# STEP 1/14: IMPORTS & ENVIRONMENT SETUP
+# STEP 1/14: IMPORTS & ENVIRONMENT SETUP (Dependency-Safe)
 # ==========================================================
 
 print("Step 1/14: Imports & Environment Setup")
 print("--------------------------------------")
-print("WHAT:\n  Import required Python packages and configure device.")
-print("WHY:\n  Ensure reproducibility and GPU usage for training.")
-print("HOW:\n  Use torch, torchvision, PIL, pandas, sklearn, and set torch device.\n")
+print("WHAT:\n  Import required Python packages, define global dependencies, and configure device.")
+print("WHY:\n  Ensure reproducibility, avoid undefined variables in later steps, and enable GPU usage.")
+print("HOW:\n  Import torch, torchvision, PIL, pandas, sklearn, json, datetime,\n"
+      "  define global constants, and initialize device + random seeds.\n")
 
+# ----------------------------------------------------------
+# Core Python & Data Libraries
+# ----------------------------------------------------------
+import os
+import json
 import random
+import shutil
+import zipfile
 import numpy as np
 import pandas as pd
 from glob import glob
 from pathlib import Path
+from datetime import datetime
 from PIL import Image
+
+# ----------------------------------------------------------
+# PyTorch & Vision
+# ----------------------------------------------------------
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import Dataset, DataLoader, Subset
 from torchvision import transforms, models
-from torch.cuda.amp import autocast, GradScaler
-from sklearn.metrics import f1_score, average_precision_score
-import os, shutil, zipfile
-import json                       
-from datetime import datetime     
-from sklearn.metrics import average_precision_score, f1_score, accuracy_score
+
+# Modern AMP (Torch 2.x compatible)
+from torch.amp import autocast, GradScaler
 
 # ----------------------------------------------------------
-# Device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"✔ Using device: {device}")
+# Metrics
+# ----------------------------------------------------------
+from sklearn.metrics import (
+    f1_score,
+    average_precision_score,
+    accuracy_score
+)
 
 # ----------------------------------------------------------
-# Example placeholders (replace with actual variables from your pipeline)
+# Global Constants (Used Across Steps 2–14)
+# ----------------------------------------------------------
 NUM_CLASSES = 80
 THRESHOLD = 0.5
 SEED = 42
 
-# Step 4/14 & 6/14: placeholder transforms
-from torchvision import transforms
-IMG_SIZE = 224
-train_transform = transforms.Compose([
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
-])
-val_transform = transforms.Compose([
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
-])
+# Model Saving Path (Used in Step 8/14 & 14/14)
+best_model_path = "best_model.pth"
 
+# Class Names Placeholder (Used in Step 9/14 reporting)
+classes = [f"class_{i}" for i in range(NUM_CLASSES)]
+
+# ----------------------------------------------------------
+# Device Configuration
+# ----------------------------------------------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"✔ Using device: {device}")
+
+if torch.cuda.is_available():
+    print(f"✔ GPU: {torch.cuda.get_device_name(0)}")
+else:
+    print("⚠ Running on CPU — training will be slower.")
+
+# ----------------------------------------------------------
 # Reproducibility
-SEED = 42
+# ----------------------------------------------------------
 torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"✔ Using device: {device}\n")
+
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+print("✔ Random seeds initialized.")
+print("✔ Global dependencies defined successfully.\n")
 
 # ==========================================================
 # STEP 2/14: HYPERPARAMETERS & GLOBAL VARIABLES
