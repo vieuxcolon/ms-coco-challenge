@@ -131,22 +131,35 @@ print("WHAT:\n  Define image transforms for training and validation/test sets.")
 print("WHY:\n  Augmentation improves generalization; validation uses only normalization to reflect real data.")
 print("HOW:\n  Use torchvision transforms with Resize, Normalize, RandomFlip, Rotation, ColorJitter.\n")
 
+# ---------------------------
+# Centralized normalization (reusable)
+# ---------------------------
+imagenet_norm = transforms.Normalize(
+    mean=[0.485, 0.456, 0.406],
+    std=[0.229, 0.224, 0.225]
+)
+
+# ---------------------------
+# Training transforms
+# ---------------------------
 train_transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(15),
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+    imagenet_norm
 ])
 
+# ---------------------------
+# Validation / Test transforms
+# ---------------------------
 val_transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+    imagenet_norm
 ])
+
 print("✔ Transforms defined for train and validation/test.\n")
 
 # ==========================================================
