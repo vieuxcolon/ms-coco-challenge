@@ -478,29 +478,26 @@ print("HOW:\n  1) Compute per-class positive frequencies from training set.\n"
       "  2) Derive pos_weight = num_negatives / (num_positives + epsilon) → optionally apply smoothing.\n"
       "  3) Apply nn.BCEWithLogitsLoss with pos_weight on GPU.\n")
 
-# Placeholder criterion
-criterion = nn.BCEWithLogitsLoss()
-
 # -----------------------------
 # Compute Class Frequencies
 # -----------------------------
 print("Computing class frequency statistics...")
 
-num_positives = torch.zeros(NUM_CLASSES, device=device)
+num_positives = torch.zeros(NUM_CLASSES, device=device, dtype=torch.float32)
 num_samples = 0
 
 for _, labels in train_loader:
-    labels = labels.to(device)
+    labels = labels.float().to(device)
     num_positives += labels.sum(dim=0)
     num_samples += labels.size(0)
 
 num_negatives = num_samples - num_positives
 
-# Optional smoothing to avoid extreme weights for very rare/very common classes
+# Optional smoothing to avoid extreme weights
 epsilon = 1e-6
-smooth_factor = 0.05  # rec #3: small additive smoothing
+smooth_factor = 0.05
 pos_weight = (num_negatives + smooth_factor) / (num_positives + smooth_factor + epsilon)
-pos_weight = pos_weight.to(device)
+pos_weight = torch.clamp(pos_weight, max=10.0).to(device)  # optional clipping
 
 # -----------------------------
 # Define Loss
