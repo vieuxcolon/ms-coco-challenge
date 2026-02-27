@@ -25,6 +25,33 @@ import json
 from datetime import datetime     
 from sklearn.metrics import average_precision_score, f1_score, accuracy_score
 
+# ----------------------------------------------------------
+# Device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"✔ Using device: {device}")
+
+# ----------------------------------------------------------
+# Example placeholders (replace with actual variables from your pipeline)
+NUM_CLASSES = 80
+THRESHOLD = 0.5
+SEED = 42
+
+# Step 4/14 & 6/14: placeholder transforms
+from torchvision import transforms
+IMG_SIZE = 224
+train_transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.RandomHorizontalFlip(),
+    transforms.ColorJitter(),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
+])
+val_transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
+])
+
 # Reproducibility
 SEED = 42
 torch.manual_seed(SEED)
