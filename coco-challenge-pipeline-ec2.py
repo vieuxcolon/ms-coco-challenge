@@ -562,7 +562,6 @@ print("WHAT:\n  Train and validate the model while saving only the best model.")
 print("WHY:\n  Preserve the model with the lowest validation loss, avoiding unnecessary checkpoints.")
 print("HOW:\n  Forward → compute loss → backward → optimizer → AMP → validate → update scheduler → save best model.\n")
 
-# placeholder best model path
 best_model_path = "best_model.pth"
 
 for epoch in range(1, EPOCHS + 1):
@@ -585,8 +584,7 @@ for epoch in range(1, EPOCHS + 1):
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
-
-        with autocast():
+        with autocast(enabled=USE_AMP):
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -604,31 +602,28 @@ for epoch in range(1, EPOCHS + 1):
     print("-----------------------")
     print("WHAT: Evaluate model on validation set.")
     print("WHY: Monitor overfitting and guide scheduler adjustments.")
-    print("HOW: Forward pass → compute loss → compute metrics.\n")
+    print("HOW: Forward pass → compute loss → micro/macro F1 → optional class metrics.\n")
 
-    model.eval()
-    val_loss = 0.0
-    correct_preds = 0
-    total_samples = 0
+    val_results, _ = validation_loop(
+        val_loader,
+        model,
+        criterion,
+        NUM_CLASSES,
+        device,
+        multi_label=MULTI_LABEL,
+        th_multi_label=THRESHOLD,
+        class_metrics=False  # Skip per-class metrics during training for speed
+    )
 
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images = images.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            val_loss += loss.item()
-
-            predicted = (outputs.sigmoid() > THRESHOLD).float()
-            correct_preds += (predicted == labels).sum().item()
-            total_samples += labels.numel()
-
-    avg_val_loss = val_loss / len(val_loader)
-    accuracy = correct_preds / total_samples
+    avg_val_loss = val_results["loss"]
+    accuracy = val_results["accuracy"]
+    micro_f1 = val_results["micro_f1"]
+    macro_f1 = val_results["macro_f1"]
 
     print(f"✔ Validation Loss: {avg_val_loss:.4f}")
     print(f"✔ Validation Accuracy: {accuracy:.4f}")
+    print(f"✔ Micro F1: {micro_f1:.4f}")
+    print(f"✔ Macro F1: {macro_f1:.4f}")
 
     # ---------------- Scheduler Step ----------------
     scheduler.step(avg_val_loss)
@@ -637,26 +632,27 @@ for epoch in range(1, EPOCHS + 1):
     # ---------------- Best Model Saving ----------------
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
-        torch.save(model.state_dict(), "best_model.pth")
+        torch.save(model.state_dict(), best_model_path)
         print("✔ New best model saved!\n")
 
     epoch_end_time = datetime.now()
     print(f"⏱ Epoch end time  : {epoch_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"⏱ Epoch duration  : {(epoch_end_time - epoch_start_time)}\n")
 
-    # Track metrics including timestamps
+    # Track metrics
     training_log.append({
         "epoch": epoch,
         "train_loss": avg_train_loss,
         "val_loss": avg_val_loss,
         "val_accuracy": accuracy,
+        "micro_f1": micro_f1,
+        "macro_f1": macro_f1,
         "epoch_start_time": epoch_start_time.strftime("%Y-%m-%d %H:%M:%S"),
         "epoch_end_time": epoch_end_time.strftime("%Y-%m-%d %H:%M:%S"),
         "epoch_duration": str(epoch_end_time - epoch_start_time)
     })
 
-print("✔ Training completed. Best model stored as 'best_model.pth'.")
-
+print(f"✔ Training completed. Best model stored as '{best_model_path}'.")
 
 # ==========================================================
 # STEP 9/14: FINAL VALIDATION METRICS
@@ -669,52 +665,30 @@ print("WHY:\n  1) Verify overall generalization.\n"
       "  3) Prepare comprehensive metrics for experiment logging.")
 print("HOW:\n  1) Load best model checkpoint.\n"
       "  2) Run validation_loop with class_metrics=True.\n"
-      "  3) Collect all labels and probabilities to compute mAP.\n"
-      "  4) Compute micro-F1 (global) and macro-F1 (class-wise average).\n"
-      "  5) Print overall and per-class metrics.\n")
+      "  3) Compute per-class metrics and mAP.\n")
 
-# placeholder for validation loop function
-def validation_loop(loader, model, criterion, num_classes, device, multi_label=True, th_multi_label=0.5, class_metrics=False):
-    """
-    Dummy placeholder: Replace with your actual validation loop.
-    Should return (val_results, val_class_results)
-    val_results = dict(loss=..., f1=..., accuracy=...)
-    val_class_results = list of dicts per class: [{'f1':..., 'precision':..., 'recall':...}, ...]
-    """
-    val_results = {"loss": 0.0, "f1": 0.0, "accuracy": 0.0}
-    val_class_results = [{"f1":0.0, "precision":0.0, "recall":0.0} for _ in range(num_classes)]
-    return val_results, val_class_results
-
-# placeholder for class names
-classes = [f"class_{i}" for i in range(NUM_CLASSES)]
-
-# Load best model checkpoint
+# Load best model
 model.load_state_dict(torch.load(best_model_path, map_location=device))
 model.eval()
 
-# -----------------------------
-# Compute validation metrics using validation_loop
-# -----------------------------
+# Compute metrics
 val_results, val_class_results = validation_loop(
     val_loader,
     model,
     criterion,
     NUM_CLASSES,
     device,
-    multi_label=True,
+    multi_label=MULTI_LABEL,
     th_multi_label=THRESHOLD,
     class_metrics=True
 )
 
-# Extract metrics with proper F1 distinction
 avg_val_loss = val_results["loss"]
-micro_f1 = val_results["micro_f1"]  # global F1 across all samples and classes
-macro_f1 = val_results["macro_f1"]  # average of per-class F1 scores
 accuracy = val_results["accuracy"]
+micro_f1 = val_results["micro_f1"]
+macro_f1 = val_results["macro_f1"]
 
-# -----------------------------
 # Compute per-class mAP
-# -----------------------------
 all_labels, all_probs = [], []
 with torch.no_grad():
     for images, labels in val_loader:
@@ -728,15 +702,14 @@ all_labels = torch.cat(all_labels).numpy()
 all_probs = torch.cat(all_probs).numpy()
 mAP_val = average_precision_score(all_labels, all_probs, average='macro')
 
-# -----------------------------
-# Print metrics
-# -----------------------------
-print(f"✔ Validation Loss  : {avg_val_loss:.4f}")
+# Print overall metrics
+print(f"\n✔ Validation Loss  : {avg_val_loss:.4f}")
 print(f"✔ Validation Acc   : {accuracy:.4f}")
-print(f"✔ Micro F1         : {micro_f1:.4f}  (global over all samples/classes)")
-print(f"✔ Macro F1         : {macro_f1:.4f}  (average of per-class F1)")
+print(f"✔ Micro F1         : {micro_f1:.4f}")
+print(f"✔ Macro F1         : {macro_f1:.4f}")
 print(f"✔ mAP              : {mAP_val:.4f}\n")
 
+# Print class-wise metrics
 print("✔ Class-wise Validation Metrics:")
 for i, cls_metrics in enumerate(val_class_results):
     print(f"{classes[i]:20s} | F1: {cls_metrics['f1']:.4f} | "
@@ -754,9 +727,10 @@ print("WHY:\n  1) Final assessment on unseen data.\n"
 print("HOW:\n  1) Iterate over test_loader.\n"
       "  2) Apply sigmoid + threshold → predicted classes.\n"
       "  3) Store results in submission dictionary.\n"
-      "  4) Save as JSON to DRIVE_ROOT.\n")
+      "  4) Save as JSON to ROOT_DIR.\n")
 
 all_probs_test, submission_dict = [], {}
+
 with torch.no_grad():
     for images, img_ids in test_loader:
         images = images.to(device)
@@ -764,13 +738,13 @@ with torch.no_grad():
         probs = torch.sigmoid(outputs)
         all_probs_test.append(probs.cpu())
 
-        # Build submission dict
+        # Build submission dictionary
         for idx, img_id in enumerate(img_ids):
             pred_classes = [i for i, v in enumerate(probs[idx].cpu().numpy()) if v > THRESHOLD]
             submission_dict[img_id] = pred_classes
 
-# Save submission JSON
-submission_path = os.path.join(DRIVE_ROOT, "coco_test_submission.json")
+# Save submission JSON in ROOT_DIR
+submission_path = os.path.join(ROOT_DIR, "coco_test_submission.json")
 with open(submission_path, 'w') as f:
     json.dump(submission_dict, f, indent=4)
 
