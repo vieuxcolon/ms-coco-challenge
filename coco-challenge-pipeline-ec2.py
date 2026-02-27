@@ -83,25 +83,44 @@ if torch.cuda.is_available():
 print("✔ Random seeds initialized.")
 print("✔ Global dependencies defined successfully.\n")
 
-
 # ==========================================================
 # STEP 2/14: HYPERPARAMETERS & GLOBAL VARIABLES
 # ==========================================================
+
 print("Step 2/14: Hyperparameters & Globals")
 print("------------------------------------")
-print("WHAT:\n  Define training hyperparameters, thresholds, paths, and number of classes.")
-print("WHY:\n  Centralized configuration simplifies adjustments and ensures consistency.")
-print("HOW:\n  Set batch size, learning rate, epochs, number of classes, threshold, image size.\n")
+print("WHAT:\n  Define core training hyperparameters and model configuration.")
+print("WHY:\n  Centralized configuration ensures consistency across all steps\n"
+      "  and simplifies experimentation and tuning.")
+print("HOW:\n  Set batch size, learning rate, epochs, image size,\n"
+      "  classification threshold, and backbone training policy.\n")
 
+# ----------------------------------------------------------
+# Training Hyperparameters
+# ----------------------------------------------------------
 BATCH_SIZE = 16
 LEARNING_RATE = 2e-4
 EPOCHS = 25
-NUM_CLASSES = 80  # MS COCO classes
-THRESHOLD = 0.5
-IMG_SIZE = 300
-FREEZE_BACKBONE = False
-DRIVE_ROOT = "/content/drive/MyDrive/ML_Experiments"  # EC2 or Google Drive path
 
+# ----------------------------------------------------------
+# Model / Input Configuration
+# ----------------------------------------------------------
+IMG_SIZE = 300            # Must match EfficientNet-B3 input size
+THRESHOLD = 0.5           # Multi-label sigmoid threshold
+FREEZE_BACKBONE = False   # If True → only classifier head trains
+
+# ----------------------------------------------------------
+# Training Behavior Flags
+# ----------------------------------------------------------
+USE_AMP = torch.cuda.is_available()  # Enable mixed precision only if GPU
+MULTI_LABEL = True                   # MS COCO is multi-label
+
+print(f"✔ Batch size: {BATCH_SIZE}")
+print(f"✔ Learning rate: {LEARNING_RATE}")
+print(f"✔ Epochs: {EPOCHS}")
+print(f"✔ Image size: {IMG_SIZE}")
+print(f"✔ Mixed Precision Enabled: {USE_AMP}")
+print("✔ Hyperparameters initialized successfully.\n")
 
 # ==========================================================
 # STEP 3/14: TRANSFORMS
