@@ -595,19 +595,99 @@ print("✔ Optimizer, scheduler, and AMP initialized.\n")
 print("\nStep 8/14: Training + Validation (Best Model Saving)")
 print("------------------------------------------------------")
 print("WHAT:\n  Train and validate the model while saving only the best model.")
-print("WHY:\n  Preserve the model with the lowest validation loss, avoiding unnecessary checkpoints.")
-print("HOW:\n  Forward → compute loss → backward → optimizer → AMP → validate → update scheduler → save best model.\n")
+print("WHY:\n  Preserve the model with the lowest validation loss while monitoring F1 performance.")
+print("HOW:\n  1) Define unified validation loop.\n"
+      "  2) Train model using AMP.\n"
+      "  3) Validate using micro/macro F1.\n"
+      "  4) Update scheduler.\n"
+      "  5) Save best model.\n")
 
+# ==========================================================
+# Unified Validation Loop
+# ==========================================================
+def validation_loop(
+    loader,
+    model,
+    criterion,
+    num_classes,
+    device,
+    multi_label=True,
+    th_multi_label=0.5,
+    class_metrics=False
+):
+    model.eval()
+    val_loss = 0.0
+
+    all_targets = []
+    all_preds = []
+    all_probs = []
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+
+            probs = torch.sigmoid(outputs)
+            preds = (probs > th_multi_label).float()
+
+            all_targets.append(labels.cpu())
+            all_preds.append(preds.cpu())
+            all_probs.append(probs.cpu())
+
+    avg_val_loss = val_loss / len(loader)
+
+    all_targets = torch.cat(all_targets)
+    all_preds = torch.cat(all_preds)
+    all_probs = torch.cat(all_probs)
+
+    correct = (all_preds == all_targets).sum().item()
+    total = all_targets.numel()
+    accuracy = correct / total
+
+    y_true = all_targets.numpy()
+    y_pred = all_preds.numpy()
+
+    micro_f1 = f1_score(y_true, y_pred, average="micro", zero_division=0)
+    macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
+    val_results = {
+        "loss": avg_val_loss,
+        "accuracy": accuracy,
+        "micro_f1": micro_f1,
+        "macro_f1": macro_f1
+    }
+
+    val_class_results = []
+    if class_metrics:
+        for c in range(num_classes):
+            cls_true = y_true[:, c]
+            cls_pred = y_pred[:, c]
+
+            val_class_results.append({
+                "precision": precision_score(cls_true, cls_pred, zero_division=0),
+                "recall": recall_score(cls_true, cls_pred, zero_division=0),
+                "f1": f1_score(cls_true, cls_pred, zero_division=0)
+            })
+
+    return val_results, val_class_results
+
+
+# -----------------------------
+# Training Loop
+# -----------------------------
 best_model_path = "best_model.pth"
+best_val_loss = float("inf")
 
 for epoch in range(1, EPOCHS + 1):
     epoch_start_time = datetime.now()
-    print(f"\n================ Epoch {epoch}/{EPOCHS} ================")
-    print(f"⏱ Epoch start time: {epoch_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # ---------------- Training Phase ----------------
-    print("Step 8/14: Training")
-    print("--------------------")
+    print(f"\n================ Epoch {epoch}/{EPOCHS} ================")
+    print("Step 8/14: Training Phase")
+    print("---------------------------")
     print("WHAT: Update model weights.")
     print("WHY: Minimize BCE multi-label loss.")
     print("HOW: Forward → loss → backward → optimizer → AMP.\n")
@@ -620,6 +700,7 @@ for epoch in range(1, EPOCHS + 1):
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
+
         with autocast(enabled=USE_AMP):
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -633,12 +714,12 @@ for epoch in range(1, EPOCHS + 1):
     avg_train_loss = running_train_loss / len(train_loader)
     print(f"✔ Avg Training Loss: {avg_train_loss:.4f}")
 
-    # ---------------- Validation Phase ----------------
-    print("\nStep 8/14: Validation")
-    print("-----------------------")
+    # ---------------- Validation ----------------
+    print("\nStep 8/14: Validation Phase")
+    print("-----------------------------")
     print("WHAT: Evaluate model on validation set.")
-    print("WHY: Monitor overfitting and guide scheduler adjustments.")
-    print("HOW: Forward pass → compute loss → micro/macro F1 → optional class metrics.\n")
+    print("WHY: Monitor overfitting and guide scheduler.")
+    print("HOW: Forward pass → compute loss → compute micro/macro F1.\n")
 
     val_results, _ = validation_loop(
         val_loader,
@@ -648,7 +729,7 @@ for epoch in range(1, EPOCHS + 1):
         device,
         multi_label=MULTI_LABEL,
         th_multi_label=THRESHOLD,
-        class_metrics=False  # Skip per-class metrics during training for speed
+        class_metrics=False
     )
 
     avg_val_loss = val_results["loss"]
@@ -661,53 +742,38 @@ for epoch in range(1, EPOCHS + 1):
     print(f"✔ Micro F1: {micro_f1:.4f}")
     print(f"✔ Macro F1: {macro_f1:.4f}")
 
-    # ---------------- Scheduler Step ----------------
     scheduler.step(avg_val_loss)
-    print("✔ Scheduler updated based on validation loss.\n")
+    print("✔ Scheduler updated based on validation loss.")
 
-    # ---------------- Best Model Saving ----------------
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
         torch.save(model.state_dict(), best_model_path)
-        print("✔ New best model saved!\n")
+        print("✔ New best model saved!")
 
-    epoch_end_time = datetime.now()
-    print(f"⏱ Epoch end time  : {epoch_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"⏱ Epoch duration  : {(epoch_end_time - epoch_start_time)}\n")
-
-    # Track metrics
     training_log.append({
         "epoch": epoch,
         "train_loss": avg_train_loss,
         "val_loss": avg_val_loss,
         "val_accuracy": accuracy,
         "micro_f1": micro_f1,
-        "macro_f1": macro_f1,
-        "epoch_start_time": epoch_start_time.strftime("%Y-%m-%d %H:%M:%S"),
-        "epoch_end_time": epoch_end_time.strftime("%Y-%m-%d %H:%M:%S"),
-        "epoch_duration": str(epoch_end_time - epoch_start_time)
+        "macro_f1": macro_f1
     })
 
-print(f"✔ Training completed. Best model stored as '{best_model_path}'.")
+print(f"\n✔ Training completed. Best model stored as '{best_model_path}'.")
+
 
 # ==========================================================
 # STEP 9/14: FINAL VALIDATION METRICS
 # ==========================================================
 print("\nStep 9/14: Final Validation Metrics (Class-wise + mAP)")
 print("--------------------------------------------------------")
-print("WHAT:\n  Evaluate the best model on the validation set including per-class metrics and mean Average Precision (mAP).")
-print("WHY:\n  1) Verify overall generalization.\n"
-      "  2) Detect class-specific performance issues.\n"
-      "  3) Prepare comprehensive metrics for experiment logging.")
-print("HOW:\n  1) Load best model checkpoint.\n"
-      "  2) Run validation_loop with class_metrics=True.\n"
-      "  3) Compute per-class metrics and mAP.\n")
+print("WHAT:\n  Evaluate best model with detailed class-wise metrics.")
+print("WHY:\n  Detect class imbalance and measure true generalization.")
+print("HOW:\n  Load best model → run validation_loop(class_metrics=True) → compute mAP.\n")
 
-# Load best model
 model.load_state_dict(torch.load(best_model_path, map_location=device))
 model.eval()
 
-# Compute metrics
 val_results, val_class_results = validation_loop(
     val_loader,
     model,
@@ -724,33 +790,35 @@ accuracy = val_results["accuracy"]
 micro_f1 = val_results["micro_f1"]
 macro_f1 = val_results["macro_f1"]
 
-# Compute per-class mAP
+# Compute mAP
 all_labels, all_probs = [], []
 with torch.no_grad():
     for images, labels in val_loader:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device)
         outputs = model(images)
         probs = torch.sigmoid(outputs)
-        all_labels.append(labels.cpu())
+
+        all_labels.append(labels)
         all_probs.append(probs.cpu())
 
 all_labels = torch.cat(all_labels).numpy()
 all_probs = torch.cat(all_probs).numpy()
-mAP_val = average_precision_score(all_labels, all_probs, average='macro')
 
-# Print overall metrics
+mAP_val = average_precision_score(all_labels, all_probs, average="macro")
+
 print(f"\n✔ Validation Loss  : {avg_val_loss:.4f}")
 print(f"✔ Validation Acc   : {accuracy:.4f}")
 print(f"✔ Micro F1         : {micro_f1:.4f}")
 print(f"✔ Macro F1         : {macro_f1:.4f}")
 print(f"✔ mAP              : {mAP_val:.4f}\n")
 
-# Print class-wise metrics
 print("✔ Class-wise Validation Metrics:")
 for i, cls_metrics in enumerate(val_class_results):
-    print(f"{classes[i]:20s} | F1: {cls_metrics['f1']:.4f} | "
-          f"Precision: {cls_metrics['precision']:.4f} | Recall: {cls_metrics['recall']:.4f}")
-
+    print(f"{classes[i]:20s} | "
+          f"F1: {cls_metrics['f1']:.4f} | "
+          f"Precision: {cls_metrics['precision']:.4f} | "
+          f"Recall: {cls_metrics['recall']:.4f}")
+      
 # ==========================================================
 # STEP 10/14: Final Test Evaluation + Submission JSON
 # ==========================================================
