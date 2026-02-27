@@ -874,7 +874,7 @@ print("HOW:\n  1) Save model state_dict.\n"
 # ----------------------------- 
 # Save Best Model 
 # -----------------------------
-MODEL_PATH = os.path.join(DRIVE_ROOT, "efficientnet_b3_coco_best.pth")
+MODEL_PATH = os.path.join(ROOT_DIR, "efficientnet_b3_coco_best.pth")
 torch.save(model.state_dict(), MODEL_PATH)
 print(f"✔ Best model saved at {MODEL_PATH}")
 
@@ -948,7 +948,7 @@ experiment_report = {
     "submission_json_path": submission_path
 }
 
-json_output_path = os.path.join(DRIVE_ROOT, "experiment_report.json")
+json_output_path = os.path.join(ROOT_DIR, "experiment_report.json")
 with open(json_output_path, 'w') as json_file:
     json.dump(experiment_report, json_file, indent=4)
 
