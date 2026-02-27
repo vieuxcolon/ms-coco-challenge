@@ -523,7 +523,7 @@ print("HOW:\n  Use AdamW optimizer with ReduceLROnPlateau scheduler.\n")
 
 # ---------------- Optimizer ----------------
 optimizer = optim.AdamW(
-    model.parameters(),
+    filter(lambda p: p.requires_grad, model.parameters()),  # respects FREEZE_BACKBONE
     lr=LEARNING_RATE,
     weight_decay=1e-4
 )
@@ -533,8 +533,16 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode='min',
     factor=0.5,
-    patience=2
+    patience=2,
+    verbose=True
 )
+
+# ---------------- AMP Setup ----------------
+scaler = GradScaler(enabled=USE_AMP)  # Automatic Mixed Precision if GPU available
+
+# ---------------- Tracking ----------------
+training_log = []          # per-epoch metrics
+best_val_loss = float("inf")  # track best validation loss
 
 print("Optimizer & Scheduler Summary:")
 print(f"  Optimizer       : AdamW")
@@ -542,12 +550,8 @@ print(f"  Learning Rate   : {LEARNING_RATE}")
 print(f"  Weight Decay    : 1e-4")
 print(f"  Scheduler       : ReduceLROnPlateau")
 print(f"  LR Reduction    : factor=0.5 after 2 stagnant epochs")
-print("✔ Optimizer and scheduler initialized.\n")
-
-# ---------------- AMP Setup ----------------
-scaler = GradScaler()  # Automatic Mixed Precision
-training_log = []      # Track per-epoch metrics
-best_val_loss = float("inf")  # Track best validation loss
+print(f"  AMP Enabled     : {USE_AMP}")
+print("✔ Optimizer, scheduler, and AMP initialized.\n")
 
 # ==========================================================
 # STEP 8/14: TRAINING + VALIDATION (BEST MODEL SAVING)
