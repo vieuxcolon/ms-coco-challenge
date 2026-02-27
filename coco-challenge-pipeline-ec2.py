@@ -730,7 +730,6 @@ print("HOW:\n  1) Iterate over test_loader.\n"
       "  4) Save as JSON to ROOT_DIR.\n")
 
 all_probs_test, submission_dict = [], {}
-
 with torch.no_grad():
     for images, img_ids in test_loader:
         images = images.to(device)
@@ -738,12 +737,12 @@ with torch.no_grad():
         probs = torch.sigmoid(outputs)
         all_probs_test.append(probs.cpu())
 
-        # Build submission dictionary
+        # Build submission dict
         for idx, img_id in enumerate(img_ids):
             pred_classes = [i for i, v in enumerate(probs[idx].cpu().numpy()) if v > THRESHOLD]
             submission_dict[img_id] = pred_classes
 
-# Save submission JSON in ROOT_DIR
+# Save submission JSON to ROOT_DIR
 submission_path = os.path.join(ROOT_DIR, "coco_test_submission.json")
 with open(submission_path, 'w') as f:
     json.dump(submission_dict, f, indent=4)
