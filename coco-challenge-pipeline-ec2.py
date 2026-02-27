@@ -8,20 +8,22 @@ print("WHAT:\n  Import required Python packages and configure device.")
 print("WHY:\n  Ensure reproducibility and GPU usage for training.")
 print("HOW:\n  Use torch, torchvision, PIL, pandas, sklearn, and set torch device.\n")
 
-import os
 import random
 import numpy as np
 import pandas as pd
 from glob import glob
 from pathlib import Path
 from PIL import Image
-import zipfile
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms, models
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.metrics import f1_score, average_precision_score
+import os, shutil, zipfile
+import json                       
+from datetime import datetime     
+from sklearn.metrics import average_precision_score, f1_score, accuracy_score
 
 # Reproducibility
 SEED = 42
