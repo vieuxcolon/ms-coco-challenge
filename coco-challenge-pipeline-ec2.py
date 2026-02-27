@@ -39,9 +39,10 @@ from torch.amp import autocast, GradScaler
 # Metrics
 # ----------------------------------------------------------
 from sklearn.metrics import (
+    precision_score,
+    recall_score,
     f1_score,
-    average_precision_score,
-    accuracy_score
+    average_precision_score
 )
 
 # ----------------------------------------------------------
