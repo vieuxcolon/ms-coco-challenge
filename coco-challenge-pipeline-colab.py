@@ -163,26 +163,34 @@ val_transform = transforms.Compose([
 print("✔ Transforms defined for train and validation/test.\n")
 
 # ==========================================================
-# STEP 4A/14: Dataset Paths & Local Copy (EC2)
+# STEP 4A/14: Dataset Extraction & Local Copy (Colab)
 # ==========================================================
-
-print("Step 4A/14: Dataset Paths & Local Copy")
-print("--------------------------------------")
-print("WHAT:\n  Define local EC2 paths for MS COCO datasets and copy zip files from drive.")
-print("WHY:\n  Local disk access is faster than network storage, avoids runtime errors, "
-      "and ensures deterministic extraction in Step 4B.")
-print("HOW:\n  1. Set ROOT_DIR for local disk\n"
-      "  2. Define full paths to train/test image zips and labels\n"
-      "  3. Copy files from Google Drive (or pre-copied) to ROOT_DIR\n"
-      "  4. Ensure target directories exist.\n")
+print("\nStep 4A/14: Dataset Extraction & Local Copy (Colab)")
+print("----------------------------------------------------")
+print("WHAT:\n  Mount Google Drive, copy dataset zip files to local /content/data, and extract safely.")
+print("WHY:\n  1) Local disk access is faster than reading directly from Drive.\n"
+      "  2) Ensures deterministic extraction for training/validation.\n"
+      "  3) Flatten nested subdirectories to produce expected target structure.\n")
+print("HOW:\n  1) Mount Google Drive.\n"
+      "  2) Copy train/test image zips and label zip from Drive root to /content/data.\n"
+      "  3) Unzip each archive if needed.\n"
+      "  4) Flatten all nested folders recursively to the target directory.\n")
 
 import os
 import shutil
+import zipfile
+from pathlib import Path
 
 # ---------------------------
-# Local EC2 storage
+# Mount Google Drive
 # ---------------------------
-ROOT_DIR = "/home/ubuntu/data"
+from google.colab import drive
+drive.mount('/content/drive')
+
+# ---------------------------
+# Define local Colab storage
+# ---------------------------
+ROOT_DIR = "/content/data"
 os.makedirs(ROOT_DIR, exist_ok=True)
 
 TRAIN_IMG_ZIP   = os.path.join(ROOT_DIR, "train-resized.zip")
@@ -193,31 +201,69 @@ TRAIN_IMG_DIR   = os.path.join(ROOT_DIR, "images/train")
 TRAIN_LABEL_DIR = os.path.join(ROOT_DIR, "labels/train")
 TEST_IMG_DIR    = os.path.join(ROOT_DIR, "images/test")
 
-os.makedirs(TRAIN_IMG_DIR, exist_ok=True)
-os.makedirs(TRAIN_LABEL_DIR, exist_ok=True)
-os.makedirs(TEST_IMG_DIR, exist_ok=True)
+# ---------------------------
+# Copy zips from Drive root to /content/data
+# ---------------------------
+for zip_name in ["train-resized.zip", "test-resized.zip", "train.zip"]:
+    src = f"/content/drive/MyDrive/{zip_name}"  # adjust if in subfolder
+    dst = os.path.join(ROOT_DIR, zip_name)
+    if not os.path.exists(dst):
+        shutil.copy(src, dst)
+        print(f"✔ Copied {zip_name} → {ROOT_DIR}")
+    else:
+        print(f"✔ {zip_name} already exists in {ROOT_DIR}")
 
 # ---------------------------
-# Optional: Copy zip files from pre-mounted Drive / user input
+# Utility Functions
 # ---------------------------
-def copy_zip_if_missing(src, dst):
-    """Copy zip file only if not already present locally"""
-    if os.path.exists(dst):
-        print(f"✔ {os.path.basename(dst)} already exists locally.")
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+
+def dir_ready(path):
+    return os.path.exists(path) and len(os.listdir(path)) > 0
+
+def flatten_dir_recursive(src_dir, target_dir):
+    """Move all files from nested folders to target_dir recursively."""
+    moved_count = 0
+    for root, _, files in os.walk(src_dir):
+        for file in files:
+            src_file = os.path.join(root, file)
+            dst_file = os.path.join(target_dir, file)
+            if not os.path.exists(dst_file):
+                shutil.move(src_file, dst_file)
+                moved_count += 1
+    shutil.rmtree(src_dir)
+    return moved_count
+
+def unzip_and_flatten(zip_path, target_dir):
+    """Extract zip and flatten all nested folders into target_dir."""
+    if dir_ready(target_dir):
+        print(f"✔ {target_dir} already ready → skipping extraction.")
         return
-    if not os.path.exists(src):
-        raise FileNotFoundError(f"❌ Source file not found: {src}")
-    print(f"⚡ Copying {os.path.basename(src)} → {dst}")
-    shutil.copy(src, dst)
-    print(f"✔ Copy complete: {dst}\n")
+    ensure_dir(target_dir)
+    temp_dir = target_dir + "_tmp"
+    ensure_dir(temp_dir)
 
-# Example usage (user may adjust src if already copied manually)
-# GDRIVE_DATA_DIR = "/mnt/gdrive/ms-coco"
-# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train-resized.zip"), TRAIN_IMG_ZIP)
-# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "test-resized.zip"), TEST_IMG_ZIP)
-# copy_zip_if_missing(os.path.join(GDRIVE_DATA_DIR, "train.zip"), TRAIN_LABEL_ZIP)
+    print(f"⚡ Extracting {zip_path} → temporary folder {temp_dir}")
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(temp_dir)
 
-print("✔ Dataset paths defined and local directories ready.\n")
+    print(f"⚡ Flattening all nested directories → {target_dir}")
+    moved = flatten_dir_recursive(temp_dir, target_dir)
+    print(f"✔ Moved {moved} files to {target_dir}\n")
+
+# ---------------------------
+# Unzip datasets with full flatten
+# ---------------------------
+unzip_and_flatten(TRAIN_IMG_ZIP, TRAIN_IMG_DIR)
+unzip_and_flatten(TEST_IMG_ZIP, TEST_IMG_DIR)
+unzip_and_flatten(TRAIN_LABEL_ZIP, TRAIN_LABEL_DIR)
+
+print(f"\n✔ Dataset extraction complete. Target directories:")
+print(f"  Train images : {TRAIN_IMG_DIR}")
+print(f"  Train labels : {TRAIN_LABEL_DIR}")
+print(f"  Test images  : {TEST_IMG_DIR}\n")
 
 # ==========================================================
 # STEP 4B/14: Dataset Objects, Train/Validation Split & DataLoaders
