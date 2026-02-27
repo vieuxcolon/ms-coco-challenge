@@ -1,3 +1,4 @@
+
 # ==========================================================
 # STEP 1/14: IMPORTS & ENVIRONMENT SETUP (Dependency-Safe)
 # ==========================================================
@@ -264,6 +265,7 @@ print(f"\n✔ Dataset extraction complete. Target directories:")
 print(f"  Train images : {TRAIN_IMG_DIR}")
 print(f"  Train labels : {TRAIN_LABEL_DIR}")
 print(f"  Test images  : {TEST_IMG_DIR}\n")
+
 
 # ==========================================================
 # STEP 4B/14: Dataset Objects, Train/Validation Split & DataLoaders
@@ -599,6 +601,18 @@ print(f"  LR Reduction    : factor=0.5 after 2 stagnant epochs")
 print(f"  AMP Enabled     : {USE_AMP}")
 print("✔ Optimizer, scheduler, and AMP initialized.\n")
 
+# placeholder for validation loop function
+def validation_loop(loader, model, criterion, num_classes, device, multi_label=True, th_multi_label=0.5, class_metrics=False):
+    """
+    Dummy placeholder: Replace with your actual validation loop.
+    Should return (val_results, val_class_results)
+    val_results = dict(loss=..., f1=..., accuracy=...)
+    val_class_results = list of dicts per class: [{'f1':..., 'precision':..., 'recall':...}, ...]
+    """
+    val_results = {"loss": 0.0, "f1": 0.0, "accuracy": 0.0}
+    val_class_results = [{"f1":0.0, "precision":0.0, "recall":0.0} for _ in range(num_classes)]
+    return val_results, val_class_results
+
 # ==========================================================
 # STEP 8/14: TRAINING + VALIDATION (BEST MODEL SAVING)
 # ==========================================================
@@ -815,7 +829,7 @@ print("HOW:\n  1) Save model state_dict.\n"
 # ----------------------------- 
 # Save Best Model 
 # -----------------------------
-MODEL_PATH = os.path.join(DRIVE_ROOT, "efficientnet_b3_coco_best.pth")
+MODEL_PATH = os.path.join(ROOT_DIR, "efficientnet_b3_coco_best.pth")
 torch.save(model.state_dict(), MODEL_PATH)
 print(f"✔ Best model saved at {MODEL_PATH}")
 
@@ -889,7 +903,7 @@ experiment_report = {
     "submission_json_path": submission_path
 }
 
-json_output_path = os.path.join(DRIVE_ROOT, "experiment_report.json")
+json_output_path = os.path.join(ROOT_DIR, "experiment_report.json")
 with open(json_output_path, 'w') as json_file:
     json.dump(experiment_report, json_file, indent=4)
 
