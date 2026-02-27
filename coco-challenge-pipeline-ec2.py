@@ -396,6 +396,7 @@ print(f"✔ Test batches: {len(test_loader)}\n")
 # ==========================================================
 # STEP 5/14: MODEL SETUP
 # ==========================================================
+
 print("Step 5/14: Model Architecture Setup")
 print("------------------------------------")
 print("WHAT:\n  Load pretrained EfficientNet-B3 and adapt classifier head")
@@ -405,17 +406,17 @@ print("  accelerating convergence and improving generalization.\n")
 print("HOW:\n  Load official pretrained weights → optionally freeze backbone →"
       " replace classifier layer → move model to GPU.\n")
 
-# -----------------------------
-# Load EfficientNet-B3
-# -----------------------------
+# ----------------------------------------------------------
+# Load EfficientNet-B3 with pretrained ImageNet weights
+# ----------------------------------------------------------
 from torchvision.models import efficientnet_b3, EfficientNet_B3_Weights
 
 weights = EfficientNet_B3_Weights.DEFAULT
 model = efficientnet_b3(weights=weights)
 
-# -----------------------------
+# ----------------------------------------------------------
 # Optional Backbone Freezing
-# -----------------------------
+# ----------------------------------------------------------
 if FREEZE_BACKBONE:
     for param in model.features.parameters():
         param.requires_grad = False
@@ -423,18 +424,20 @@ if FREEZE_BACKBONE:
 else:
     print("✔ Full fine-tuning enabled (backbone + classifier).")
 
-# -----------------------------
-# Replace Classification Head
-# -----------------------------
+# ----------------------------------------------------------
+# Replace Classification Head for NUM_CLASSES output
+# ----------------------------------------------------------
 in_features = model.classifier[1].in_features
 model.classifier[1] = nn.Linear(in_features, NUM_CLASSES)
 
-# Move to device
+# ----------------------------------------------------------
+# Move model to device
+# ----------------------------------------------------------
 model = model.to(device)
 
-# -----------------------------
+# ----------------------------------------------------------
 # Model Summary
-# -----------------------------
+# ----------------------------------------------------------
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 print("\nModel Summary:")
