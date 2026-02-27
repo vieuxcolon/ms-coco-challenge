@@ -436,6 +436,9 @@ print("HOW:\n  1) Compute per-class positive frequencies from training set.\n"
       "  2) Derive pos_weight = num_negatives / (num_positives + epsilon) → optionally apply smoothing.\n"
       "  3) Apply nn.BCEWithLogitsLoss with pos_weight on GPU.\n")
 
+# Placeholder criterion
+criterion = nn.BCEWithLogitsLoss()
+
 # -----------------------------
 # Compute Class Frequencies
 # -----------------------------
