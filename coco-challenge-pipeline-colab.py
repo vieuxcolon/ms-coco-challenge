@@ -726,7 +726,7 @@ for epoch in range(1, EPOCHS + 1):
 
         optimizer.zero_grad()
 
-        with autocast(enabled=USE_AMP):
+        with autocast(device_type=device.type, enabled=USE_AMP):
             outputs = model(images)
             loss = criterion(outputs, labels)
 
