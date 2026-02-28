@@ -596,14 +596,14 @@ print("\nStep 8/14: Training + Validation (Best Model Saving)")
 print("------------------------------------------------------")
 print("WHAT:\n  Train and validate the model while saving only the best model.")
 print("WHY:\n  Preserve the model with the lowest validation loss while monitoring F1 performance.")
-print("HOW:\n  1) Define unified validation loop.\n"
-      "  2) Train model using AMP.\n"
+print("HOW:\n  1) Train using mini-batches with AMP.\n"
+      "  2) Print mini-batch progress.\n"
       "  3) Validate using micro/macro F1.\n"
       "  4) Update scheduler.\n"
       "  5) Save best model.\n")
 
 # ==========================================================
-# Unified Validation Loop
+# Unified Validation Loop (unchanged)
 # ==========================================================
 def validation_loop(
     loader,
@@ -675,9 +675,8 @@ def validation_loop(
 
     return val_results, val_class_results
 
-
 # -----------------------------
-# Training Loop
+# Training Loop with Verbosity
 # -----------------------------
 best_model_path = "best_model.pth"
 best_val_loss = float("inf")
@@ -688,19 +687,21 @@ for epoch in range(1, EPOCHS + 1):
     print(f"\n================ Epoch {epoch}/{EPOCHS} ================")
     print("Step 8/14: Training Phase")
     print("---------------------------")
-    print("WHAT: Update model weights.")
-    print("WHY: Minimize BCE multi-label loss.")
-    print("HOW: Forward → loss → backward → optimizer → AMP.\n")
+    print("WHAT: Update model weights for each mini-batch.")
+    print("WHY: Minimize BCE multi-label loss and track training dynamics.")
+    print("HOW: Forward → loss → backward → optimizer → AMP → mini-batch prints.\n")
 
     model.train()
     running_train_loss = 0.0
+    PRINT_FREQ = 50  # print every N mini-batches
 
-    for images, labels in train_loader:
+    for batch_idx, (images, labels) in enumerate(train_loader, start=1):
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
+        # ----------------- AMP Forward & Backward -----------------
         with autocast(device_type=device.type, enabled=USE_AMP):
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -708,8 +709,16 @@ for epoch in range(1, EPOCHS + 1):
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+        # ----------------------------------------------------------
 
         running_train_loss += loss.item()
+
+        # ---------------- Mini-batch Verbose Print ----------------
+        if batch_idx % PRINT_FREQ == 0 or batch_idx == len(train_loader):
+            print(f"[Epoch {epoch} | Batch {batch_idx}/{len(train_loader)}] "
+                  f"Batch Loss: {loss.item():.4f} | "
+                  f"Running Avg: {running_train_loss / batch_idx:.4f}")
+        # ----------------------------------------------------------
 
     avg_train_loss = running_train_loss / len(train_loader)
     print(f"✔ Avg Training Loss: {avg_train_loss:.4f}")
@@ -760,7 +769,6 @@ for epoch in range(1, EPOCHS + 1):
     })
 
 print(f"\n✔ Training completed. Best model stored as '{best_model_path}'.")
-
 
 # ==========================================================
 # STEP 9/14: FINAL VALIDATION METRICS
